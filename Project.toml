@@ -2,3 +2,21 @@ name = "RocketControl"
 uuid = "040515d8-d794-4022-a3c1-c4fab579c04a"
 version = "0.1.0"
 authors = ["LuizFVdePaula <luizfvpaula13@gmail.com>"]
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+ISAtmosphere = "2079e98e-b9a5-4add-91d8-8d7b7bc8f821"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+CSV = "0.10.15"
+CairoMakie = "0.15.8"
+DataFrames = "1.8.1"
+ISAtmosphere = "0.2.5"
+JSON = "1.3.0"
+LinearAlgebra = "1.12.0"
+StaticArrays = "1.9.15"

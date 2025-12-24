@@ -1,5 +1,19 @@
 module RocketControl
 
-greet() = print("Hello World!")
+include("BaseDefs.jl")
+include("EnvironmentDefs.jl")
+include("StageDefs.jl")
+include("Aerodynamics.jl")
+include("Propulsion.jl")
+include("Structure.jl")
+include("Dynamics.jl")
+include("RK4Solver.jl")
+include("Simulate.jl")
 
-end # module RocketControl
+using .BaseDefs, .EnvironmentDefs, .StageDefs, .Simulate
+
+export Environment, environment
+export Stage, stage
+export simulate
+
+end
