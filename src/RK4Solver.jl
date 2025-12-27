@@ -24,13 +24,11 @@ Solve (integrate) starting at `sv₀`.
 """
 function solve(sv₀, u, stg, env, trange::AbstractRange)
     dt = step(trange)
-    hist = zeros(length(sv₀), length(trange) + 1)
-    hist[:, 1] = sv₀
+    hist = zeros(length(sv₀), length(trange))
     sv = sv₀
     for (i, t) ∈ enumerate(trange)
+        hist[:, i] = sv
         sv = nextstatevector(sv, u, stg, env, t, dt)
-        hist[:, i + 1] = sv
-        # hist[:, i + 1] = nextstatevector(hist[:, i], t[i], dt)
     end
     return hist
 end

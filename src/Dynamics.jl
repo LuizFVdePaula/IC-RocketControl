@@ -80,22 +80,22 @@ function aeroloads(h, vBA, ωBA, u, stg, t_stg)
 end
 
 function proploads(h, stg, t_stg, xcm = calc_xcm(stg, t_stg))
-    T = thrust(stg, t_stg)
-    ΔP = stg.Pe - p_Pa(h)
-    Ae = stg.Ae
-    ξ = stg.ξ
-    η = stg.η
+    T = thrust(stg.prp, t_stg)
+    ΔP = stg.prp.Pe - p_Pa(h)
+    Ae = stg.prp.Ae
+    ξ = stg.prp.ξ
+    η = stg.prp.η
     Fprop = (T + ΔP * Ae) * SVector(cos(η) * cos(ξ), cos(η) * sin(ξ), -sin(η))
-    re = stg.re - SVector(xcm, 0, 0)
+    re = stg.prp.re - SVector(xcm, 0, 0)
     Mprop = re × Fprop
     return (Fprop, Mprop)
 end
 
-function loads(sv, u, stg::Stage, t_stg)
+function loads(sv, u, stg::Stage, env, t_stg, TBG)
     h = -sv[3]
-    vBG = SVector(sv[8:10])
-    ωBG = SVector(sv[11:13])
-    vBA = vBG #- TBG * windspeed() # wrap wind speed in interface
+    vBG = SVector{3}(sv[8:10])
+    ωBG = SVector{3}(sv[11:13])
+    vBA = vBG - TBG * windspeed(env, h)
     ωBA = ωBG # wind does not rotate... or does it?
     (Faero, Maero) = aeroloads(h, vBA, ωBA, u, stg, t_stg)
     (Fprop, Mprop) = proploads(h, stg, t_stg)
@@ -112,18 +112,18 @@ function dynamics(sv, u, stg, env, t)
     #u: [δp, δq, δr]
 
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
-    vBG = SVector(sv[8:10])
-    ωBG = SVector(sv[11:13])
+    vBG = SVector{3}(sv[8:10])
+    ωBG = SVector{3}(sv[11:13])
 
     # kinematic equations
     xyzdot = transpose(TBG) * vBG
     p, q, r = ωBG
     Ωquat = SMatrix{4, 4}([0 -p -q -r; p 0 r -q; q -r 0 p; r q -p 0])
-    quat = SVector(sv[4:7])
+    quat = SVector{4}(sv[4:7])
     quatdot = 0.5 * Ωquat * quat - 0.5 * quat * (1 - 1 / (transpose(quat) * quat))
 
     # dynamic equations
-    (F, M) = loads(sv, u, stg, t)
+    (F, M) = loads(sv, u, stg, env, t, TBG)
     g = TBG * SVector(0, 0, env.g)
     m = stage_mass(stg, t)
     ṁ = calc_mdot(stg.prp, t)

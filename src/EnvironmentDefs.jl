@@ -1,8 +1,12 @@
 module EnvironmentDefs
 
-export Environment, environment
+export Environment, environment, windspeed
 
-using CSV, DataFrames, Interpolations, JSON
+using CSV
+using DataFrames
+using Interpolations
+using JSON
+using StaticArrays
 
 """
     Environment
@@ -43,5 +47,7 @@ function environment(jsonpath::AbstractString)
     wind_table = CSV.read(dict["wind"], DataFrame)
     return Environment(wind_table)
 end
+
+windspeed(env::Environment, h) = SVector(env.wind_north(h), env.wind_east(h), 0.0)
 
 end

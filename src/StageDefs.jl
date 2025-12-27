@@ -5,6 +5,7 @@ export Stage, stage
 import ..Aerodynamics: Aerodynamics, ActiveAerodynamics
 import ..Propulsion: Propulsion, SolidPropulsion
 import ..Structure: Structure, StructureSubsystem
+using JSON
 
 struct Stage
     aed::ActiveAerodynamics

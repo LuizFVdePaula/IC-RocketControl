@@ -42,7 +42,7 @@ mutable struct StateVector{T} <: FieldVector{13, T}
     r::T
 end
 
-calc_ϕ(q0, q1, q2, q3) = atan(2 * (q2 * q3 + q0 * q1), q0^2 - q1^2 - q2^2 - q3^2)
+calc_ϕ(q0, q1, q2, q3) = atan(2 * (q2 * q3 + q0 * q1), q0^2 - q1^2 - q2^2 + q3^2)
 calc_θ(q0, q1, q2, q3) = asin(-2 * (q1 * q3 - q0 * q2))
 calc_ψ(q0, q1, q2, q3) = atan(2 * (q1 * q2 + q0 * q3), q0^2 + q1^2 - q2^2 - q3^2)
 

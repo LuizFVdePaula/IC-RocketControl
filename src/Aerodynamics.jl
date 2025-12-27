@@ -311,12 +311,12 @@ function interp_coeff(M, αT, coef, scheme)
     return extrapolate(interpolate((M, αT), coef_table, Gridded(Linear())), scheme)
 end
 
-function from_montecarlo(aed::PassiveAerodynamics, σCA)
+function from_montecarlo(aed::ActiveAerodynamics, σCA)
     base_mc = deepcopy(aed.base)
     fCA = 1 + randn() * σCA
     base_mc.CAon.itp.coefs .*= fCA
     base_mc.CAoff.itp.coefs .*= fCA
-    return PassiveAerodynamics(aed.Lref, aed.Sref, aed.XR, base_mc)
+    return ActiveAerodynamics(aed.Lref, aed.Sref, aed.XR, base_mc)
 end
 
 end
