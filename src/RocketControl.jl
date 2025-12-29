@@ -10,10 +10,10 @@ include("Dynamics.jl")
 include("RK4Solver.jl")
 include("Simulate.jl")
 
-using .BaseDefs, .EnvironmentDefs, .StageDefs, .Simulate
+using .BaseDefs, .EnvironmentDefs, .StageDefs, .Dynamics, .Simulate
 
 export Environment, environment
 export Stage, stage
-export simulate
+export simulate, postprocess, dynamics, ∇
 
 end

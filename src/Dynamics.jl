@@ -1,7 +1,7 @@
 module Dynamics
 
-export aeroloads, proploads, loads, dynamics
-export calc_mdot, calc_xcm, calc_J, calc_Jdot, calc_ρ, calc_mach, calc_αT, calc_ϕA
+export aeroloads, proploads, loads, dynamics, ∇
+export calc_mdot, calc_xcm, calc_J, calc_Jdot, calc_ρ, calc_mach, calc_αT, calc_ϕA, stage_mass
 
 using ..BaseDefs, ..EnvironmentDefs, ..StageDefs, ..Aerodynamics, ..Propulsion
 using ISAtmosphere
@@ -52,28 +52,28 @@ calc_αT(vBA) = atan(norm(vBA[2:3]) / vBA[1])
 
 calc_ϕA(vBA) = mod2pi(atan(vBA[2], vBA[3]))
 
-function aeroloads(h, vBA, ωBA, u, stg, t_stg)
+function aeroloads(h, vBA, ωBA, δ, stg, t_stg)
     vBAnorm = norm(vBA)
     q̄ = 0.5 * calc_ρ(h) * vBAnorm^2
     M = calc_mach(vBAnorm, h)
     αT = calc_αT(vBA)
     ϕA = calc_ϕA(vBA)
     TBR = rotX(ϕA)
-    δ = transpose(TBR) * u
+    δR = transpose(TBR) * δ
 
     S = stg.aed.Sref
-    CA = t_stg < stg.prp.tb ? getCAon(stg.aed, M, αT, ϕA, δ[2], δ[3]) : getCAoff(stg.aed, M, αT, ϕA, δ[2], δ[3])
-    CY = getCY(stg.aed, M, αT, ϕA, δ[3])
-    CN = getCN(stg.aed, M, αT, ϕA, δ[2])
+    CA = t_stg < stg.prp.tb ? getCAon(stg.aed, M, αT, ϕA, δR[2], δR[3]) : getCAoff(stg.aed, M, αT, ϕA, δR[2], δR[3])
+    CY = getCY(stg.aed, M, αT, ϕA, δR[3])
+    CN = getCN(stg.aed, M, αT, ϕA, δR[2])
     Faero = q̄ * S * TBR * SVector(CA, CY, CN)
 
     L = stg.aed.Lref
     XCG = calc_xcm(stg, t_stg) / L
     ΔXCG = stg.aed.XR - XCG
     Ωnorm = transpose(TBR) * ωBA * L / (2 * vBAnorm)
-    Cl = getCl(stg.aed, M, αT, ϕA, Ωnorm[1], δ[1])
-    Cm = getCm(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[2], δ[2])
-    Cn = getCn(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[3], δ[3])
+    Cl = getCl(stg.aed, M, αT, ϕA, Ωnorm[1], δR[1])
+    Cm = getCm(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[2], δR[2])
+    Cn = getCn(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[3], δR[3])
     Maero = q̄ * S * L * TBR * SVector(Cl, Cm, Cn)
 
     return (Faero, Maero)
@@ -91,25 +91,54 @@ function proploads(h, stg, t_stg, xcm = calc_xcm(stg, t_stg))
     return (Fprop, Mprop)
 end
 
-function loads(sv, u, stg::Stage, env, t_stg, TBG)
+function loads(sv, δ, stg::Stage, env, t_stg, TBG)
     h = -sv[3]
     vBG = SVector{3}(sv[8:10])
     ωBG = SVector{3}(sv[11:13])
     vBA = vBG - TBG * windspeed(env, h)
     ωBA = ωBG # wind does not rotate... or does it?
-    (Faero, Maero) = aeroloads(h, vBA, ωBA, u, stg, t_stg)
+    (Faero, Maero) = aeroloads(h, vBA, ωBA, δ, stg, t_stg)
     (Fprop, Mprop) = proploads(h, stg, t_stg)
     F = Faero + Fprop
     M = Maero + Mprop
     return (F, M)
 end
 
+function ∇(f::Function, x₀::AbstractVector)
+    m = length(f(x₀))
+    n = length(x₀)
+    F = zeros(m, n)
+    ε = 1e-8
+    for col in 1:n
+        x₊ = x₀ |> copy |> float
+        x₊[col] += ε
+        x₋ = x₀ |> copy |> float
+        x₋[col] -= ε
+        F[:, col] = (f(x₊) - f(x₋)) / 2ε
+    end
+    return F
+end
+
+function ∇(f::Function, x₀::Real)
+    m = length(f(x₀))
+    F = zeros(m)
+    ε = 1e-8
+    x₊ = x₀ |> copy |> float
+    x₊ += ε
+    x₋ = x₀ |> copy |> float
+    x₋ -= ε
+    F = (f(x₊) - f(x₋)) / 2ε
+    return F
+end
+
 """
-    function dynamics
+    dynamics(sv, δ, stg, env, t)
+
+Obtain the time derivative of state vector `sv` subject to deflections `δ` at time instant `t`.
 """
-function dynamics(sv, u, stg, env, t)
+function dynamics(sv, δ, stg, env, t)
     #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r]
-    #u: [δp, δq, δr]
+    #δ: [δp, δq, δr]
 
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
     vBG = SVector{3}(sv[8:10])
@@ -123,7 +152,7 @@ function dynamics(sv, u, stg, env, t)
     quatdot = 0.5 * Ωquat * quat - 0.5 * quat * (1 - 1 / (transpose(quat) * quat))
 
     # dynamic equations
-    (F, M) = loads(sv, u, stg, env, t, TBG)
+    (F, M) = loads(sv, δ, stg, env, t, TBG)
     g = TBG * SVector(0, 0, env.g)
     m = stage_mass(stg, t)
     ṁ = calc_mdot(stg.prp, t)
