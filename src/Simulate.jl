@@ -14,51 +14,43 @@ using DataFrames
 using LinearAlgebra
 using StaticArrays
 
-function calc_control(x̂, t)
-    # x̂ = [q, α, r, β]
-    r = x̂[3]
-    β = x̂[4]
-    kr = if t <= 1.5
-        1.42
-    elseif 1.5 < t <= 2.5
-        1.72
-    else
-        1.95
-    end
-    kβ = if t <= 1.5
-        0.40
-    elseif 1.5 < t <= 2.5
-        0.99
-    else
-        1.67
-    end
-    δr = -kr * r - kβ * β
-    δr = clamp(δr, deg2rad(-15), deg2rad(15))
-    return [0.0, 0.0, δr]
+function calc_control(x̂, t, h, V, stg)
+    # x̂ = [p, q, α, r, β]
+    Ac, Bc = model_AB(h, V, stg, t)
+    H = [1 0 0 0 0; 0 1 0 0 0; 0 0 0 1 0]
+    sysc = ss(Ac, Bc, H, 0)
+    sysd = c2d(sysc, 0.1)
+    Q = diagm([1 / deg2rad(1)^2, 1 / deg2rad(2)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2])
+    R = diagm([1 / deg2rad(5)^2, 1 / deg2rad(5)^2, 1 / deg2rad(5)^2])
+    K = lqr(sysd, Q, R)
+    u = -K * x̂
+    δp = clamp(u[1], -deg2rad(15), deg2rad(15))
+    δq = clamp(u[2], -deg2rad(15), deg2rad(15))
+    δr = clamp(u[3], -deg2rad(15), deg2rad(15))
+    return [δp, δq, δr]
 end
 
 function takemeasure(sv)
-    # y = [q, α, r, β]
-    V = sqrt(sum(sv[8:10].^2))
+    # y = [p, q, r]
+    p = sv[11]
     q = sv[12]
-    α = sv[10] / V
     r = sv[13]
-    β = sv[9] / V
-    y = [q, α, r, β]
+    y = [p, q, r]
     return y
 end
 
-function estimate(x̂, y, u, h, V, stg, t)
+function estimate(x̂ₖ, yₖ, uₖ, h, V, stg, t)
     Ac, Bc = model_AB(h, V, stg, t)
-    H = [1 0 0 0; 0 0 1 0]
+    H = [1 0 0 0 0; 0 1 0 0 0; 0 0 0 1 0]
     sysc = ss(Ac, Bc, H, 0)
     sysd = c2d(sysc, 0.1)
     A = sysd.A
     B = sysd.B
-    xpri = A * x̂ + B * u[2:3]
+    xpri = A * x̂ₖ + B * uₖ
     ŷ = H * xpri
-    L = A \ transpose(place(A', H', 1e-2 * [1+1im, 1-1im, -1+1im, -1-1im]))
-    return xpri + L * (y[[1, 3]] - ŷ)
+    L = A \ transpose(place(A', H', 1e-1 * [1, 2, 3, 4, 5]))
+    x̂ₖ₊₁ = xpri + L * (yₖ - ŷ)
+    return x̂ₖ₊₁
 end
 
 function model_AB(h, V, stg::Stage, t)
@@ -67,45 +59,48 @@ function model_AB(h, V, stg::Stage, t)
     c = stg.aed.Lref
     m = stage_mass(stg, t)
     J = calc_J(stg, t)
+    Ixx = J[1, 1]
     Iyy = J[2, 2]
     k = ρ * V^2 * S / 2
     M = V / a_m_s(T_K(h))
-    
     XCG = calc_xcm(stg, t) / c
     ΔXCG = stg.aed.XR - XCG
 
-    Cmq = (getCm(stg.aed, M, 0.0, 0.0, ΔXCG, 1e-2, 0.0) - getCm(stg.aed, M, 0.0, 0.0, ΔXCG, 0.0, 0.0)) / 1e-2
-    Cmα = (getCm(stg.aed, M, 1e-2, 0.0, ΔXCG, 0.0, 0.0) - getCm(stg.aed, M, 0.0, 0.0, ΔXCG, 0.0, 0.0)) / 1e-2
-    CNα = (getCN(stg.aed, M, 1e-2, 0.0, 0.0) - getCN(stg.aed, M, 0.0, 0.0, 0.0)) / 1e-2
-    Cmδq = (getCm(stg.aed, M, 0.0, 0.0, ΔXCG, 0.0, 1e-2) - getCm(stg.aed, M, 0.0, 0.0, ΔXCG, 0.0, 0.0)) / 1e-2
-    CNδq = (getCN(stg.aed, M, 0.0, 0.0, 1e-2) - getCN(stg.aed, M, 0.0, 0.0, 0.0)) / 1e-2
-
+    Clp = (getCl(stg.aed, M, 0, 0, 1e-2, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2
+    Clδp = (getCl(stg.aed, M, 0, 0, 0, 1e-2) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2
+    Cmq = (getCm(stg.aed, M, 0, 0, ΔXCG, 1e-2, 0) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2
+    Cmα = (getCm(stg.aed, M, 1e-2, 0, ΔXCG, 0, 0) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2
+    CNα = (getCN(stg.aed, M, 1e-2, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2
+    Cmδq = (getCm(stg.aed, M, 0, 0, ΔXCG, 0, 1e-2) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2
+    CNδq = (getCN(stg.aed, M, 0, 0, 1e-2) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2
     Cnr = Cmq
     Cnβ = -Cmα
     CYβ = CNα
     Cnδr = Cmδq
     CYδr = -CNδq
 
+    Mp = k * c^2 / (2 * V * Ixx) * Clp
+    Mδp = k * c / Ixx * Clδp
     Mq = k * c^2 / (2 * V * Iyy) * Cmq
     Mα = k * c / Iyy * Cmα
     Nα = k * CNα / m
     Mδq = k * c / Iyy * Cmδq
     Nδq = k * CNδq / m
-
     Mr = k * c^2 / (2 * V * Iyy) * Cnr
     Mβ = k * c / Iyy * Cnβ
     Nβ = k * CYβ / m
     Mδr = k * c / Iyy * Cnδr
     Nδr = k * CYδr / m
 
+    Arol = Mp
+    Brol = Mδp
     Alon = [Mq Mα; 1 Nα / V]
     Blon = [Mδq; Nδq / V]
-
     Alat = [Mr Mβ; -1 Nβ / V]
     Blat = [Mδr; Nδr / V]
 
-    A = [Alon zeros(2, 2); zeros(2, 2) Alat]
-    B = [Blon zeros(2, 1); zeros(2, 1) Blat]
+    A = [Arol zeros(1, 4); zeros(2, 1) Alon zeros(2, 2); zeros(2, 3) Alat]
+    B = [Brol zeros(1, 2); zeros(2, 1) Blon zeros(2, 1); zeros(2, 2) Blat]
     return (A, B)
 end
 
@@ -122,12 +117,12 @@ function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     dt = Ts / n
     N = length(range(trange[begin], trange[end]; step = dt))
     sv_historic = zeros(length(sv₀), N)
-    x̂_historic = zeros(4, N)
-    u_historic = zeros(length(calc_control(sv₀, 0)), N)
+    x̂_historic = zeros(5, N)
+    u_historic = zeros(3, N)
+    x̂ = zeros(5)
     sv = sv₀
-    x̂ = zeros(4)
     for (i, t) ∈ enumerate(trange[begin:end-1])
-        u = calc_control(x̂, t)
+        u = calc_control(x̂, t, -sv[3], sv[8], stg)
         sol = solve(sv, u, stg, env, range(t, t + Ts, step = dt))
         sv_historic[:, 1+(i-1)*n:1+i*n] .= sol
         u_historic[:, 1+(i-1)*n:1+i*n] .= u
