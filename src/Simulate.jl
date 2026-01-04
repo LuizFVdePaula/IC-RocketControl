@@ -32,25 +32,39 @@ end
 
 function takemeasure(sv)
     # y = [p, q, r]
-    p = sv[11]
-    q = sv[12]
-    r = sv[13]
+    p = sv[11] + 1e-3 * randn()
+    q = sv[12] + 1e-3 * randn()
+    r = sv[13] + 1e-3 * randn()
     y = [p, q, r]
     return y
 end
 
-function estimate(x̂ₖ, yₖ, uₖ, h, V, stg, t)
+"""
+    estimate(x̂ₖ₋₁, yₖ, uₖ₋₁, h, V, stg::Stage, t)
+
+Determine state estimate `x̂ₖ` given current state measure `yₖ` and previous state estimate `xₖ₋₁`
+and applied control `uₖ₋₁`.
+
+# Inputs:
+- x̂ₖ₋₁: state estimate at instant `k - 1`.
+- yₖ: state measure at instant `k`.
+- uₖ₋₁: applied control at instant `k - 1`.
+"""
+function estimate(x̂ₖ₋₁, yₖ, uₖ₋₁, h, V, stg::Stage, t)
     Ac, Bc = model_AB(h, V, stg, t)
     H = [1 0 0 0 0; 0 1 0 0 0; 0 0 0 1 0]
     sysc = ss(Ac, Bc, H, 0)
     sysd = c2d(sysc, 0.1)
     A = sysd.A
     B = sysd.B
-    xpri = A * x̂ₖ + B * uₖ
-    ŷ = H * xpri
-    L = A \ transpose(place(A', H', 1e-1 * [1, 2, 3, 4, 5]))
-    x̂ₖ₊₁ = xpri + L * (yₖ - ŷ)
-    return x̂ₖ₊₁
+    x̂ₖ_pri = A * x̂ₖ₋₁ + B * uₖ₋₁
+    ŷₖ_pri = H * x̂ₖ_pri
+    R1 = diagm([0.005, 0.03, 0.02, 0.03, 0.02])
+    R2 = diagm([1e-3, 1e-3, 1e-3])
+    #K = place(A, H, 1e-1 * [1, 2, 3, 4, 5], :o; direct = true)
+    K = kalman(sysd, R1, R2; direct = true)
+    x̂ₖ_pos = x̂ₖ_pri + K * (yₖ - ŷₖ_pri)
+    return x̂ₖ_pos
 end
 
 function model_AB(h, V, stg::Stage, t)
@@ -110,6 +124,16 @@ solve resolve de [1:11] (t = 0.0 até 1.0)
 append sol[2:11] (t = 0.1 até 1.0)
 sv = sol[end]
 
+Given sample time `Ts`
+Initialize current state vector `x`
+Initialize observer `x̂`
+Loop:
+- Current time instant `tₖ`
+- Calculate control `uₖ` based on `x̂ₖ` and `tₖ`
+- Simulate from `tₖ` to `tₖ₊₁ = tₖ + Ts`
+- Update `xₖ₊₁` to the last simulated instant of time `tₖ₊₁`
+- Take measure `yₖ₊₁` based on `xₖ₊₁`
+- Update `x̂ₖ₊₁` based on `x̂ₖ`, `yₖ₊₁` and `uₖ`
 """
 function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     n = 10
@@ -134,7 +158,7 @@ function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     return sv_historic, u_historic, x̂_historic
 end
 
-function postprocess(stg, env, sv_historic, u_historic)
+function postprocess(stg, env, sv_historic, u_historic, x̂_historic)
     x = sv_historic[1, :]
     y = sv_historic[2, :]
     h = -sv_historic[3, :]
@@ -151,6 +175,11 @@ function postprocess(stg, env, sv_historic, u_historic)
     p = sv_historic[11, :]
     q = sv_historic[12, :]
     r = sv_historic[13, :]
+    p̂ = x̂_historic[1, :]
+    q̂ = x̂_historic[2, :]
+    α̂ = x̂_historic[3, :]
+    r̂ = x̂_historic[4, :]
+    β̂ = x̂_historic[5, :]
     αT = map(eachcol(sv_historic)) do sv
         local h = -sv[3]
         local V = sv[8:10]
@@ -184,6 +213,7 @@ function postprocess(stg, env, sv_historic, u_historic)
         "αT" => αT, "ϕA" => ϕA, "α" => α, "β" => β,
         "rwla" => rwla,
         "δp" => δp, "δq" => δq, "δr" => δr,
+        "p̂" => p̂, "q̂" => q̂, "α̂" => α̂, "r̂" => r̂, "β̂" => β̂
     )
     return df
 end
