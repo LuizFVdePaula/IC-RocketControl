@@ -12,7 +12,7 @@ include("Simulate.jl")
 
 using .BaseDefs, .EnvironmentDefs, .StageDefs, .Dynamics, .Simulate
 
-export Environment, environment
+export Environment, environment, plotinfo
 export Stage, stage
 export simulate, postprocess, dynamics, ∇
 

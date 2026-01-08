@@ -153,7 +153,7 @@ function dynamics(sv, δ, stg, env, t)
 
     # dynamic equations
     (F, M) = loads(sv, δ, stg, env, t, TBG)
-    g = TBG * SVector(0, 0, env.g)
+    g = TBG * SVector(0, 0, gravity)
     m = stage_mass(stg, t)
     ṁ = calc_mdot(stg.prp, t)
     xcm = calc_xcm(stg, t)

@@ -3,3 +3,4 @@ Manifest.toml
 projects/
 test.jl
 analysis.jl
+plotsim.jl
