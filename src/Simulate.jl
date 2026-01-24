@@ -16,58 +16,68 @@ using StaticArrays
 
 function calc_control(x̂, t, h, V, stg)
     # x̂ = [p, q, α, r, β]
-    Ac, Bc = model_AB(h, V, stg, t)
-    H = [1 0 0 0 0; 0 1 0 0 0; 0 0 0 1 0]
-    sysc = ss(Ac, Bc, H, 0)
+    Ac, Bc, Cc, Dc = model_ABCD(h, V, stg, t)
+    sysc = ss(Ac, Bc, Cc, Dc)
     sysd = c2d(sysc, 0.1)
     Q = diagm([1 / deg2rad(1)^2, 1 / deg2rad(2)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2])
-    R = diagm([1 / deg2rad(5)^2, 1 / deg2rad(5)^2, 1 / deg2rad(5)^2])
+    R = diagm([1 / deg2rad(10)^2, 1 / deg2rad(10)^2, 1 / deg2rad(10)^2])
     K = lqr(sysd, Q, R)
     u = -K * x̂
-    δp = clamp(u[1], -deg2rad(15), deg2rad(15))
-    δq = clamp(u[2], -deg2rad(15), deg2rad(15))
-    δr = clamp(u[3], -deg2rad(15), deg2rad(15))
+    δp = clamp(u[1], deg2rad(-15), deg2rad(15))
+    δq = clamp(u[2], deg2rad(-15), deg2rad(15))
+    δr = clamp(u[3], deg2rad(-15), deg2rad(15))
     return [δp, δq, δr]
 end
 
-function takemeasure(sv)
+function takemeasure(sv, u, stg, env, t)
     # y = [p, q, r]
-    p = sv[11] + 1e-3 * randn()
-    q = sv[12] + 1e-3 * randn()
-    r = sv[13] + 1e-3 * randn()
-    y = [p, q, r]
+    dsv = dynamics(sv, u, stg, env, t)
+    TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
+    g = TBG * SVector(0, 0, gravity)
+    p = sv[11] + deg2rad(0.1) * randn()
+    q = sv[12] + deg2rad(0.1) * randn()
+    r = sv[13] + deg2rad(0.1) * randn()
+    v̇ = dsv[9] + 1e-1 * randn() - g[2]
+    ẇ = dsv[10] + 1e-1 * randn() - g[3]
+    y = [p, q, ẇ, r, v̇]
     return y
 end
 
 """
-    estimate(x̂ₖ₋₁, yₖ, uₖ₋₁, h, V, stg::Stage, t)
+    estimate(x̂ₖ, yₖ, uₖ, h, V, stg::Stage, t)
 
-Determine state estimate `x̂ₖ` given current state measure `yₖ` and previous state estimate `xₖ₋₁`
-and applied control `uₖ₋₁`.
+Estimate state `x̂ₖ₊₁` given previous state estimate `x̂ₖ`, state measure `yₖ` and applied control `uₖ`.
 
 # Inputs:
-- x̂ₖ₋₁: state estimate at instant `k - 1`.
+- x̂ₖ: state estimate at instant `k`.
 - yₖ: state measure at instant `k`.
-- uₖ₋₁: applied control at instant `k - 1`.
+- uₖ: applied control at instant `k`.
 """
-function estimate(x̂ₖ₋₁, yₖ, uₖ₋₁, h, V, stg::Stage, t)
-    Ac, Bc = model_AB(h, V, stg, t)
-    H = [1 0 0 0 0; 0 1 0 0 0; 0 0 0 1 0]
-    sysc = ss(Ac, Bc, H, 0)
+function estimate(x̂ₖ, yₖ, uₖ, h, V, stg::Stage, t)
+    # x = [p, q, α, r, β]
+    Ac, Bc, H, D = model_ABCD(h, V, stg, t)
+    sysc = ss(Ac, Bc, H, D)
     sysd = c2d(sysc, 0.1)
     A = sysd.A
     B = sysd.B
-    x̂ₖ_pri = A * x̂ₖ₋₁ + B * uₖ₋₁
-    ŷₖ_pri = H * x̂ₖ_pri
-    R1 = diagm([0.005, 0.03, 0.02, 0.03, 0.02])
-    R2 = diagm([1e-3, 1e-3, 1e-3])
-    #K = place(A, H, 1e-1 * [1, 2, 3, 4, 5], :o; direct = true)
-    K = kalman(sysd, R1, R2; direct = true)
-    x̂ₖ_pos = x̂ₖ_pri + K * (yₖ - ŷₖ_pri)
-    return x̂ₖ_pos
+    σw = 2 / V
+    Gα = Ac[2:3, 3] # pega a matriz [Mα; Nα / V]
+    Gβ = Ac[4:5, 5] # pega a matriz [Mβ; Nβ / V]
+    G = zeros(5, 3)
+    G[1, 1] = 5.6
+    G[2:3, 2] .= Gα
+    G[4:5, 3] .= Gβ
+    Σw = diagm([0.02^2, 4σw^2, σw^2])
+    Qc = G * Σw * transpose(G)
+    R1 = c2d(sysd, Qc, opt = :o)
+    R2 = diagm([deg2rad(0.1)^2, deg2rad(0.1)^2, 1e-2, deg2rad(0.1)^2, 1e-2])
+    K = kalman(sysd, R1, R2)
+    #K = place(A, H, 1e-1 * [1, 1.5, 2, 2.5, -1], :o)
+    x̂ₖ₊₁ = (A - K * H) * x̂ₖ + (B - K * D) * uₖ + K * yₖ
+    return x̂ₖ₊₁
 end
 
-function model_AB(h, V, stg::Stage, t)
+function model_ABCD(h, V, stg::Stage, t)
     ρ = ρ_kg_m³(p_Pa(h), T_K(h))
     S = stg.aed.Sref
     c = stg.aed.Lref
@@ -115,7 +125,9 @@ function model_AB(h, V, stg::Stage, t)
 
     A = [Arol zeros(1, 4); zeros(2, 1) Alon zeros(2, 2); zeros(2, 3) Alat]
     B = [Brol zeros(1, 2); zeros(2, 1) Blon zeros(2, 1); zeros(2, 2) Blat]
-    return (A, B)
+    C = [1 0 0 0 0; 0 1 0 0 0; 0 V Nα 0 0; 0 0 0 1 0; 0 0 0 -V Nβ]
+    D = [0 0 0; 0 0 0; 0 Nδq 0; 0 0 0; 0 0 Nδr]
+    return (A, B, C, D)
 end
 
 """
@@ -130,10 +142,10 @@ Initialize observer `x̂`
 Loop:
 - Current time instant `tₖ`
 - Calculate control `uₖ` based on `x̂ₖ` and `tₖ`
+- Take measure `yₖ` based on `xₖ`
 - Simulate from `tₖ` to `tₖ₊₁ = tₖ + Ts`
+- Update `x̂ₖ₊₁` based on `x̂ₖ`, `yₖ` and `uₖ`
 - Update `xₖ₊₁` to the last simulated instant of time `tₖ₊₁`
-- Take measure `yₖ₊₁` based on `xₖ₊₁`
-- Update `x̂ₖ₊₁` based on `x̂ₖ`, `yₖ₊₁` and `uₖ`
 """
 function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     n = 10
@@ -143,22 +155,24 @@ function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     sv_historic = zeros(length(sv₀), N)
     x̂_historic = zeros(5, N)
     u_historic = zeros(3, N)
+    y_historic = zeros(5, N)
     x̂ = zeros(5)
     sv = sv₀
     for (i, t) ∈ enumerate(trange[begin:end-1])
         u = calc_control(x̂, t, -sv[3], sv[8], stg)
+        y = takemeasure(sv, u, stg, env, t)
         sol = solve(sv, u, stg, env, range(t, t + Ts, step = dt))
         sv_historic[:, 1+(i-1)*n:1+i*n] .= sol
         u_historic[:, 1+(i-1)*n:1+i*n] .= u
         x̂_historic[:, 1+(i-1)*n:1+i*n] .= x̂
+        y_historic[:, 1+(i-1)*n:1+i*n] .= y
+        x̂ = estimate(x̂, y, u, -sv[3], sv[8], stg, t)
         sv = sol[:, end]
-        y = takemeasure(sv)
-        x̂ = estimate(x̂, y, u, -sv[3], sv[8], stg, t + Ts)
     end
-    return sv_historic, u_historic, x̂_historic
+    return sv_historic, u_historic, x̂_historic, y_historic
 end
 
-function postprocess(stg, env, sv_historic, u_historic, x̂_historic)
+function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic)
     x = sv_historic[1, :]
     y = sv_historic[2, :]
     h = -sv_historic[3, :]
@@ -180,6 +194,11 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic)
     α̂ = x̂_historic[3, :]
     r̂ = x̂_historic[4, :]
     β̂ = x̂_historic[5, :]
+    p_meas = y_historic[1, :]
+    q_meas = y_historic[2, :]
+    ẇ_meas = y_historic[3, :]
+    r_meas = y_historic[4, :]
+    v̇_meas = y_historic[5, :]
     αT = map(eachcol(sv_historic)) do sv
         local h = -sv[3]
         local V = sv[8:10]
@@ -213,7 +232,8 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic)
         "αT" => αT, "ϕA" => ϕA, "α" => α, "β" => β,
         "rwla" => rwla,
         "δp" => δp, "δq" => δq, "δr" => δr,
-        "p̂" => p̂, "q̂" => q̂, "α̂" => α̂, "r̂" => r̂, "β̂" => β̂
+        "p̂" => p̂, "q̂" => q̂, "α̂" => α̂, "r̂" => r̂, "β̂" => β̂,
+        "p_meas" => p_meas, "q_meas" => q_meas, "ẇ_meas" => ẇ_meas, "r_meas" => r_meas, "v̇_meas" => v̇_meas
     )
     return df
 end

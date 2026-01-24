@@ -79,12 +79,13 @@ function plotinfo(env::Environment)
     v_north = env.wind_north(h)
     v_east = env.wind_east(h)
     V = @. sqrt(v_north^2 + v_east^2)
+    θ = atan.(v_east, v_north) .+ π
 
     fig = Figure(size = (900, 600))
     ax_speed = Axis(fig[1, 1], xlabel = "Speed [m/s]", ylabel = "Height AGL [m]")
     lines!(ax_speed, V, h, linewidth = 2)
     ax_direction = PolarAxis(fig[1, 2], title = "Wind direction", direction = -1, theta_0 = -π / 2)
-    lines!(ax_direction, atan.(v_east, v_north), h)
+    lines!(ax_direction, θ, h)
     fig
 end
 
