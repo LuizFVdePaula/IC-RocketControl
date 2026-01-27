@@ -19,7 +19,7 @@ function calc_control(x̂, t, h, V, stg)
     Ac, Bc, Cc, Dc = model_ABCD(h, V, stg, t)
     sysc = ss(Ac, Bc, Cc, Dc)
     sysd = c2d(sysc, 0.1)
-    Q = diagm([1 / deg2rad(1)^2, 1 / deg2rad(2)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2])
+    Q = diagm([1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2])
     R = diagm([1 / deg2rad(10)^2, 1 / deg2rad(10)^2, 1 / deg2rad(10)^2])
     K = lqr(sysd, Q, R)
     u = -K * x̂
@@ -30,16 +30,24 @@ function calc_control(x̂, t, h, V, stg)
 end
 
 function takemeasure(sv, u, stg, env, t)
-    # y = [p, q, r]
+    # y = [p, q, ẇ, r, v̇]
     dsv = dynamics(sv, u, stg, env, t)
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
     g = TBG * SVector(0, 0, gravity)
-    p = sv[11] + deg2rad(0.1) * randn()
-    q = sv[12] + deg2rad(0.1) * randn()
-    r = sv[13] + deg2rad(0.1) * randn()
-    v̇ = dsv[9] + 1e-1 * randn() - g[2]
-    ẇ = dsv[10] + 1e-1 * randn() - g[3]
-    y = [p, q, ẇ, r, v̇]
+    ω = sv[11:13]
+    ω̇ = dsv[11:13]
+    acm = dsv[8:10]
+    xcm = calc_xcm(stg, t)
+    ρ⃗ = SVector(-0.4, 0, 0) - SVector(xcm, 0, 0)
+    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + deg2rad(0.1) * SVector{3}(randn(3, 1))
+    ωs = ω + deg2rad(0.1) * SVector{3}(randn(3, 1))
+    #p = sv[11] + deg2rad(0.1) * randn()
+    #q = sv[12] + deg2rad(0.1) * randn()
+    #r = sv[13] + deg2rad(0.1) * randn()
+    #v̇ = dsv[9] + 1e-1 * randn() - g[2]
+    #ẇ = dsv[10] + 1e-1 * randn() - g[3]
+    #y = [p, q, ẇ, r, v̇]
+    y = [ωs[1], ωs[2], as[3], ωs[3], as[2]]
     return y
 end
 
@@ -61,8 +69,8 @@ function estimate(x̂ₖ, yₖ, uₖ, h, V, stg::Stage, t)
     A = sysd.A
     B = sysd.B
     σw = 2 / V
-    Gα = Ac[2:3, 3] # pega a matriz [Mα; Nα / V]
-    Gβ = Ac[4:5, 5] # pega a matriz [Mβ; Nβ / V]
+    Gα = Ac[2:3, 3] # [Mα; Nα / V]
+    Gβ = Ac[4:5, 5] # [Mβ; Nβ / V]
     G = zeros(5, 3)
     G[1, 1] = 5.6
     G[2:3, 2] .= Gα
@@ -71,8 +79,8 @@ function estimate(x̂ₖ, yₖ, uₖ, h, V, stg::Stage, t)
     Qc = G * Σw * transpose(G)
     R1 = c2d(sysd, Qc, opt = :o)
     R2 = diagm([deg2rad(0.1)^2, deg2rad(0.1)^2, 1e-2, deg2rad(0.1)^2, 1e-2])
-    K = kalman(sysd, R1, R2)
-    #K = place(A, H, 1e-1 * [1, 1.5, 2, 2.5, -1], :o)
+    #K = kalman(sysd, R1, R2)
+    K = place(A, H, 1e-1 * [1, 2, 1im, -2, -1], :o)
     x̂ₖ₊₁ = (A - K * H) * x̂ₖ + (B - K * D) * uₖ + K * yₖ
     return x̂ₖ₊₁
 end
@@ -148,6 +156,9 @@ Loop:
 - Update `xₖ₊₁` to the last simulated instant of time `tₖ₊₁`
 """
 function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
+    model = DynamicModel(stg)
+    imu = IMUSensor(SVector(-0.4, 0, 0), deg2rad(1), deg2rad(1), zeros(SVector, 3), zeros(SVector, 3))
+
     n = 10
     Ts = step(trange)
     dt = Ts / n
@@ -156,23 +167,27 @@ function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange)
     x̂_historic = zeros(5, N)
     u_historic = zeros(3, N)
     y_historic = zeros(5, N)
-    x̂ = zeros(5)
     sv = sv₀
+    x̂ = zeros(5)
+    u = calc_control(x̂, t, -sv[3], sv[8], stg)
     for (i, t) ∈ enumerate(trange[begin:end-1])
-        u = calc_control(x̂, t, -sv[3], sv[8], stg)
-        y = takemeasure(sv, u, stg, env, t)
+        sysc = continuousmodel(model, x̂, sv[8], -sv[3])
+        sysd = c2d(sysc, Ts)
+
+        y = takemeasure(imu, sv, u, stg, env, t)
+        u = control(x̂, sysd)
         sol = solve(sv, u, stg, env, range(t, t + Ts, step = dt))
         sv_historic[:, 1+(i-1)*n:1+i*n] .= sol
         u_historic[:, 1+(i-1)*n:1+i*n] .= u
         x̂_historic[:, 1+(i-1)*n:1+i*n] .= x̂
         y_historic[:, 1+(i-1)*n:1+i*n] .= y
-        x̂ = estimate(x̂, y, u, -sv[3], sv[8], stg, t)
+        x̂ = estimate(x̂, y, u, sysc, sysd)
         sv = sol[:, end]
     end
     return sv_historic, u_historic, x̂_historic, y_historic
 end
 
-function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic)
+function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic, ts)
     x = sv_historic[1, :]
     y = sv_historic[2, :]
     h = -sv_historic[3, :]
@@ -223,17 +238,20 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic
     δp = u_historic[1, :]
     δq = u_historic[2, :]
     δr = u_historic[3, :]
+    u̇ = [diff(u); 0] / step(ts)
+    v̇ = [diff(v); 0] / step(ts)
+    ẇ = [diff(w); 0] / step(ts)
     df = DataFrame(
         "x" => x, "y" => y, "h" => h,
         "q0" => q0, "q1" => q1, "q2" => q2, "q3" => q3,
-        "u" => u, "v" => v, "w" => w,
+        "u" => u, "v" => v, "w" => w, "du" => u̇, "dv" => v̇, "dw" => ẇ,
         "p" => p, "q" => q, "r" => r,
         "ϕ" => ϕ, "θ" => θ, "ψ" => ψ,
         "αT" => αT, "ϕA" => ϕA, "α" => α, "β" => β,
         "rwla" => rwla,
         "δp" => δp, "δq" => δq, "δr" => δr,
         "p̂" => p̂, "q̂" => q̂, "α̂" => α̂, "r̂" => r̂, "β̂" => β̂,
-        "p_meas" => p_meas, "q_meas" => q_meas, "ẇ_meas" => ẇ_meas, "r_meas" => r_meas, "v̇_meas" => v̇_meas
+        "p_meas" => p_meas, "q_meas" => q_meas, "dw_meas" => ẇ_meas, "r_meas" => r_meas, "dv_meas" => v̇_meas
     )
     return df
 end

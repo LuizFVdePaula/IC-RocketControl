@@ -136,9 +136,9 @@ end
 
 Obtain the time derivative of state vector `sv` subject to deflections `δ` at time instant `t`.
 """
-function dynamics(sv, δ, stg, env, t)
-    #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r]
-    #δ: [δp, δq, δr]
+function dynamics(sv, u, stg, env, t)
+    #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr]
+    #u: [up, uq, ur]
 
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
     vBG = SVector{3}(sv[8:10])
@@ -152,6 +152,7 @@ function dynamics(sv, δ, stg, env, t)
     quatdot = 0.5 * Ωquat * quat - 0.5 * quat * (1 - 1 / (transpose(quat) * quat))
 
     # dynamic equations
+    δ = sv[14:16]
     (F, M) = loads(sv, δ, stg, env, t, TBG)
     g = TBG * SVector(0, 0, gravity)
     m = stage_mass(stg, t)
@@ -162,8 +163,9 @@ function dynamics(sv, δ, stg, env, t)
     J̇ = calc_Jdot(stg, t, xcm)
     uvwdot = -ωBG × vBG + F / m + g
     pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG - ṁ * re × (ωBG × re))
+    δdot = 1 / 0.06 * (u - δ)
 
-    return SVector([xyzdot; quatdot; uvwdot; pqrdot])
+    return SVector([xyzdot; quatdot; uvwdot; pqrdot; δdot])
 end
 
 end
