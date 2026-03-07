@@ -152,7 +152,7 @@ function dynamics(sv, u, stg, env, t)
     quatdot = 0.5 * Ωquat * quat - 0.5 * quat * (1 - 1 / (transpose(quat) * quat))
 
     # dynamic equations
-    δ = sv[14:16]
+    δ = SVector{3}(sv[14:16])
     (F, M) = loads(sv, δ, stg, env, t, TBG)
     g = TBG * SVector(0, 0, gravity)
     m = stage_mass(stg, t)
@@ -163,7 +163,7 @@ function dynamics(sv, u, stg, env, t)
     J̇ = calc_Jdot(stg, t, xcm)
     uvwdot = -ωBG × vBG + F / m + g
     pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG - ṁ * re × (ωBG × re))
-    δdot = 1 / 0.06 * (u - δ)
+    δdot = 1 / 0.05 * (SVector{3}(u) - δ)
 
     return SVector([xyzdot; quatdot; uvwdot; pqrdot; δdot])
 end

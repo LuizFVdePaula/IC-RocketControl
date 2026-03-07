@@ -3,9 +3,14 @@ module GNC
 using ..BaseDefs
 using ..StageDefs
 using ..EnvironmentDefs
-using ..Dynamics: dynamics
+using ..Aerodynamics
+using ..Dynamics
+using ControlSystems
+using ISAtmosphere
 using LinearAlgebra
 using StaticArrays
+
+export IMUSensor, DynamicModel, KalmanMethod, takemeasure, continuousmodel, estimate, control
 
 """
 Complete state: x = [x, y, z, q₀, q₁, q₂, q₃, u, v, w, p, q, r, δp, δq, δr]
@@ -16,11 +21,11 @@ Control law: u = -K ⋅ x̂
 """
 
 struct IMUSensor
-    r::SVector{Float64, 3}
+    r::SVector{3, Float64}
     σ_gyro::Float64
     σ_accl::Float64
-    bias_gyro::SVector{Float64, 3}
-    bias_accl::SVector{Float64, 3}
+    bias_gyro::SVector{3, Float64}
+    bias_accl::SVector{3, Float64}
 end
 
 function takemeasure(imu::IMUSensor, sv, u, stg::Stage, env::Environment, t)
@@ -66,6 +71,7 @@ struct DynamicModel
 end
 
 function DynamicModel(stg::Stage)
+    M = 0.3
     return DynamicModel(
         stg.aed.Lref,
         stg.aed.Sref,
@@ -74,17 +80,17 @@ function DynamicModel(stg::Stage)
         t -> calc_xcm(stg, t),
         t -> getindex(calc_J(stg, t), 1, 1),
         t -> getindex(calc_J(stg, t), 2, 2),
-        Clp = (getCl(stg.aed, M, 0, 0, 1e-2, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
-        Clδp = (getCl(stg.aed, M, 0, 0, 0, 1e-2) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
-        Cmq = (getCm(stg.aed, M, 0, 0, ΔXCG, 1e-2, 0) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2,
-        Cmα = (getCm(stg.aed, M, 1e-2, 0, ΔXCG, 0, 0) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2,
-        CNα = (getCN(stg.aed, M, 1e-2, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2,
-        Cmδq = (getCm(stg.aed, M, 0, 0, ΔXCG, 0, 1e-2) - getCm(stg.aed, M, 0, 0, ΔXCG, 0, 0)) / 1e-2,
-        CNδq = (getCN(stg.aed, M, 0, 0, 1e-2) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2
+        (getCl(stg.aed, M, 0, 0, 1e-2, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
+        (getCl(stg.aed, M, 0, 0, 0, 1e-2) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
+        (getCm(stg.aed, M, 0, 0, 0, 1e-2, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
+        (getCm(stg.aed, M, 1e-2, 0, 0, 0, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
+        (getCN(stg.aed, M, 1e-2, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2,
+        (getCm(stg.aed, M, 0, 0, 0, 0, 1e-2) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
+        (getCN(stg.aed, M, 0, 0, 1e-2) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2
     )
 end
 
-function continuousmodel(dm::DynamicModel, x̂, V, h)
+function continuousmodel(dm::DynamicModel, x̂, V, h, t)
     ρ = ρ_kg_m³(p_Pa(h), T_K(h))
     S = dm.Sref
     c = dm.Lref
@@ -123,8 +129,8 @@ function continuousmodel(dm::DynamicModel, x̂, V, h)
     A = [
         Mp 0  0  0      0
         0  Mq 0  Mα     0
-        0  1  0  Nα / V 0
         0  0  Mr 0      Mβ
+        0  1  0  Nα / V 0
         0  0  -1 0      Nβ / V
     ]
     B = [
@@ -145,61 +151,49 @@ function continuousmodel(dm::DynamicModel, x̂, V, h)
         0 0   0
         0 0   0
         0 0   0
-        0 Nδr 0
-        0 0   Nδq
+        0 0   Nδr
+        0 Nδq 0
     ]
     return ss(A, B, C, D)
 end
 
 struct KalmanMethod
     P₀
+    Q
+    R
 end
 
 """
-    estimate(x̂ₖ, yₖ, uₖ, sysc, model)
+    estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, model)
 
-Estimate state `x̂ₖ₊₁` given previous state estimate `x̂ₖ`, state measure `yₖ` and applied control `uₖ`.
+Estimate state `x̂ₖ` given previous state estimate `x̂ₖ₋₁`, applied control `uₖ₋₁` and current state measure `zₖ`.
 
 # Inputs:
-- `x̂ₖ`: state estimate at instant `k`.
-- `yₖ`: state measure at instant `k`.
-- `uₖ`: applied control at instant `k`.
-- `sysc`: continuous-time system model.
-- `method`: method (Kalman, Luenberger, Reduced).
+- `x̂ₖ₋₁`: previous state estimate at instant `k - 1`.
+- `zₖ`: current state measure at instant of estimation `k`.
+- `uₖ₋₁`: applied control between instants `k - 1` and `k`.
+- `sysd`: discrete-time system model.
 """
-function estimate(x̂ₖ, yₖ, uₖ, sysc, sysd)
+function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::KalmanMethod)
     # x̂ = [p, q, r, α, β]
-    method = "kalman"
     A = sysd.A
     B = sysd.B
     H = sysd.C
     D = sysd.D
 
-    if method == "kalman"
-        Ac = sysc.A
-        σw = 2 / 100
-        Mα, Nα_V = Ac[2:3, 4] # [Mα; Nα / V]
-        Mβ, Nβ_V = Ac[4:5, 5] # [Mβ; Nβ / V]
-        G = [
-            5.6 0    0
-            0   Mα   0
-            0   0    Mβ
-            0   Nα_V 0
-            0   0    Nβ_V
-        ]
-        Σw = diagm([0.02^2, 4σw^2, σw^2])
-        Qc = G * Σw * transpose(G)
-        R1 = c2d(sysd, Qc, opt = :o)
-        R2 = diagm([deg2rad(1)^2, deg2rad(1)^2, deg2rad(1)^2, 1, 1])
-        K = kalman(sysd, R1, R2)
-    elseif method == "pole"
-        K = place(A, H, 1e-1 * [1, 2, 1im, -2, -1], :o)
-    else
-        error("Method $method not implemented.")
-    end
+    x̂ₖ⁻ = A * x̂ₖ₋₁ + B * uₖ₋₁
+    Pₖ⁻ = A * Pₖ₋₁ * A' + method.Q
+    
+    ẑₖ⁻ = H * x̂ₖ⁻  + D * uₖ₋₁
+    yₖ = zₖ - ẑₖ⁻
+    S = H * Pₖ⁻ * H' + method.R
+    K = (Pₖ⁻ * H') / S
 
-    x̂ₖ₊₁ = (A - K * H) * x̂ₖ + (B - K * D) * uₖ + K * yₖ
-    return x̂ₖ₊₁
+    #TODO Joseph form
+
+    Pₖ⁺ = (I - K * H) * Pₖ⁻
+    x̂ₖ⁺ = x̂ₖ⁻ + K * yₖ
+    return x̂ₖ⁺, Pₖ⁺
 end
 
 function control(x̂, sysd)
