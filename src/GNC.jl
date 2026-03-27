@@ -1,7 +1,7 @@
 module GNC
 
 using ..BaseDefs
-using ..StageDefs
+using ..StageDefs: Stage, IMUSensor
 using ..EnvironmentDefs
 using ..Aerodynamics
 using ..Dynamics
@@ -10,7 +10,7 @@ using ISAtmosphere
 using LinearAlgebra
 using StaticArrays
 
-export IMUSensor, DynamicModel, KalmanMethod, takemeasure, continuousmodel, estimate, control
+export DynamicModel, KalmanMethod, takemeasure, continuousmodel, estimate, control
 
 """
 Complete state: x = [x, y, z, q₀, q₁, q₂, q₃, u, v, w, p, q, r, δp, δq, δr]
@@ -20,15 +20,7 @@ Control input: u = [up, uq, ur]
 Control law: u = -K ⋅ x̂
 """
 
-struct IMUSensor
-    r::SVector{3, Float64}
-    σ_gyro::Float64
-    σ_accl::Float64
-    bias_gyro::SVector{3, Float64}
-    bias_accl::SVector{3, Float64}
-end
-
-function takemeasure(imu::IMUSensor, sv, u, stg::Stage, env::Environment, t)
+function takemeasure(sv, u, stg::Stage, env::Environment, t)
     # z = [p, q, r, v̇, ẇ]
     dsv = dynamics(sv, u, stg, env, t)
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
@@ -37,9 +29,9 @@ function takemeasure(imu::IMUSensor, sv, u, stg::Stage, env::Environment, t)
     ω̇ = dsv[11:13]
     acm = dsv[8:10]
     xcm = calc_xcm(stg, t)
-    ρ⃗ = imu.r - SVector(xcm, 0, 0)
-    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + imu.σ_accl * SVector{3}(randn(3, 1)) + imu.bias_accl
-    ωs = ω + imu.σ_gyro * SVector{3}(randn(3, 1)) + imu.bias_gyro
+    ρ⃗ = stg.imu.r - SVector(xcm, 0, 0)
+    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + stg.imu.σ_accl * SVector{3}(randn(3, 1)) + stg.imu.bias_accl
+    ωs = ω + stg.imu.σ_gyro * SVector{3}(randn(3, 1)) + stg.imu.bias_gyro
     z = SVector{5}([ωs; as[2:3]])
     return z
 end
@@ -54,24 +46,27 @@ m, Jxx, Jyy, xcm => interpolation of time (feedforward)
 Coeff => constant?, consider coeff around XR and transfer Cm inside 'continuousmodel'
 """
 struct DynamicModel
-    Lref
-    Sref
-    XR
+    Lref::Float64
+    Sref::Float64
+    XR::Float64
     m
     xcm
     Jxx
     Jyy
-    Clp
-    Clδp
-    Cmq
-    Cmα
-    CNα
-    Cmδq
-    CNδq
+    Clp::Float64
+    Clδp::Float64
+    Cmq::Float64
+    Cmα::Float64
+    CNα::Float64
+    Cmδq::Float64
+    CNδq::Float64
 end
 
 function DynamicModel(stg::Stage)
-    M = 0.3
+    M = 0.25
+    dα = deg2rad(3)
+    dδ = deg2rad(3)
+    dω = deg2rad(2)
     return DynamicModel(
         stg.aed.Lref,
         stg.aed.Sref,
@@ -80,13 +75,13 @@ function DynamicModel(stg::Stage)
         t -> calc_xcm(stg, t),
         t -> getindex(calc_J(stg, t), 1, 1),
         t -> getindex(calc_J(stg, t), 2, 2),
-        (getCl(stg.aed, M, 0, 0, 1e-2, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
-        (getCl(stg.aed, M, 0, 0, 0, 1e-2) - getCl(stg.aed, M, 0, 0, 0, 0)) / 1e-2,
-        (getCm(stg.aed, M, 0, 0, 0, 1e-2, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
-        (getCm(stg.aed, M, 1e-2, 0, 0, 0, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
-        (getCN(stg.aed, M, 1e-2, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2,
-        (getCm(stg.aed, M, 0, 0, 0, 0, 1e-2) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / 1e-2,
-        (getCN(stg.aed, M, 0, 0, 1e-2) - getCN(stg.aed, M, 0, 0, 0)) / 1e-2
+        (getCl(stg.aed, M, 0, 0, dω, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / dω,
+        (getCl(stg.aed, M, 0, 0, 0, dδ) - getCl(stg.aed, M, 0, 0, 0, 0)) / dδ,
+        (getCm(stg.aed, M, 0, 0, 0, dω, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dω,
+        (getCm(stg.aed, M, dα, 0, 0, 0, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dα,
+        (getCN(stg.aed, M, dα, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / dα,
+        (getCm(stg.aed, M, 0, 0, 0, 0, dδ) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dδ,
+        (getCN(stg.aed, M, 0, 0, dδ) - getCN(stg.aed, M, 0, 0, 0)) / dδ
     )
 end
 
@@ -125,7 +120,7 @@ function continuousmodel(dm::DynamicModel, x̂, V, h, t)
     Nβ = k * CYβ / m
     Mδr = k * c / Jyy * Cnδr
     Nδr = k * CYδr / m
-
+    #TODO: include actuator 1st order dynamics
     A = [
         Mp 0  0  0      0
         0  Mq 0  Mα     0
@@ -183,7 +178,7 @@ function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::Kalm
 
     x̂ₖ⁻ = A * x̂ₖ₋₁ + B * uₖ₋₁
     Pₖ⁻ = A * Pₖ₋₁ * A' + method.Q
-    
+
     ẑₖ⁻ = H * x̂ₖ⁻  + D * uₖ₋₁
     yₖ = zₖ - ẑₖ⁻
     S = H * Pₖ⁻ * H' + method.R
@@ -196,16 +191,18 @@ function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::Kalm
     return x̂ₖ⁺, Pₖ⁺
 end
 
-function control(x̂, sysd)
+function control(x̂, sysd, t)
+    tref = 1.0
+    f = min(t / tref, 1.0)
     # x̂ = [p, q, r, α, β]
-    Q = diagm([1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2, 1 / deg2rad(1)^2])
-    R = diagm([1 / deg2rad(10)^2, 1 / deg2rad(10)^2, 1 / deg2rad(10)^2])
+    Q = diagm([1 / deg2rad(3)^2, 1 / deg2rad(3)^2, 1 / deg2rad(3)^2, 1 / deg2rad(1.0)^2, 1 / deg2rad(1.0)^2])
+    R = diagm([1 / deg2rad(30)^2, 1 / deg2rad(30)^2, 1 / deg2rad(30)^2])
     L = lqr(sysd, Q, R)
     u = -L * x̂
-    δp = clamp(u[1], deg2rad(-15), deg2rad(15))
-    δq = clamp(u[2], deg2rad(-15), deg2rad(15))
-    δr = clamp(u[3], deg2rad(-15), deg2rad(15))
-    return [δp, δq, δr]
+    δp = clamp(u[1], deg2rad(-10), deg2rad(10))
+    δq = clamp(u[2], deg2rad(-10), deg2rad(10))
+    δr = clamp(u[3], deg2rad(-10), deg2rad(10))
+    return f * [δp, δq, δr]
 end
 
 end

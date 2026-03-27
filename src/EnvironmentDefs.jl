@@ -54,9 +54,12 @@ function Environment(wind_table::DataFrame)
     else
         KeyError("`wind_table` must contain either fields 'vel_north' and 'vel_east' or 'speed' and 'direction'.")
     end
+    litp_vn = interpolate((wind_table.height,), wind_north, Gridded(Linear()))
+    litp_ve = interpolate((wind_table.height,), wind_east, Gridded(Linear()))
+    height = 0:50:2000
     return Environment(
-        extrapolate(interpolate((wind_table.height,), wind_north, Gridded(Linear())), 0.0),
-        extrapolate(interpolate((wind_table.height,), wind_east, Gridded(Linear())), 0.0),
+        extrapolate(scale(interpolate(litp_vn(height), BSpline(Cubic(Line(OnGrid())))), height), Throw()),
+        extrapolate(scale(interpolate(litp_ve(height), BSpline(Cubic(Line(OnGrid())))), height), Throw())
     )
 end
 
@@ -67,15 +70,42 @@ Create a `Environment` from a **.json** file containing environment data.
 """
 function environment(jsonpath::AbstractString)
     dict = JSON.parse(read(jsonpath, String))
-    wind_table = CSV.read(dict["wind"], DataFrame)
+    if haskey(dict, "wind_table")
+        wind_table = CSV.read(dict["wind_table"], DataFrame)
+    elseif haskey(dict, "model")
+        d = dict["model"]
+        wind_table = windmodel(d["reference_speed"], d["reference_altitude"], deg2rad(d["reference_direction"]))
+    end
     return Environment(wind_table)
 end
+
+function windmodel(Vref, href, θref)
+    h₀ = 0.1
+    hvals = [href; collect(100:100:2000)]
+    αV = 0.9 # correlação vertical de velocidade
+    αθ = 0.7 # correlação vertical de direção
+    σV = 0.5 # intensidade velocidade
+    σθ = 0.1 # intensidade direção
+    V = Vref * log.(hvals / h₀) / log(href / h₀) .+ correlatednoise(length(hvals), αV, σV)
+    θ = θref .+ correlatednoise(length(hvals), αθ, σθ)
+    return DataFrame("height" => [0; hvals], "speed" => [0; V], "direction" => [θref; rad2deg.(θ)])
+end
+
+function correlatednoise(n, α, σ)
+    x = zeros(n)
+    for i in 2:n
+        x[i] = α * x[i - 1] + σ * randn()
+    end
+    return x
+end
+
+# TODO: Dryden wind model, Zipfel, pp. 470
 
 windspeed(env::Environment, h) = SVector(env.wind_north(h), env.wind_east(h), 0.0)
 
 function plotinfo(env::Environment)
-    hmin, hmax = extrema(env.wind_north.itp.knots[1])
-    h = range(hmin, hmax, 1000)
+    hmin, hmax = extrema(env.wind_north.itp.ranges[1])
+    h = range(hmin, hmax, 200)
     v_north = env.wind_north(h)
     v_east = env.wind_east(h)
     V = @. sqrt(v_north^2 + v_east^2)

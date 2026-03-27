@@ -2,7 +2,7 @@ module Simulate
 
 export simulate, postprocess
 
-using ..BaseDefs: calc_ϕ, calc_θ, calc_ψ, rotXYZ
+using ..BaseDefs
 using ..StageDefs: Stage
 using ..EnvironmentDefs
 using ..Dynamics
@@ -26,9 +26,17 @@ Loop:
 - Simulate from `tₖ` to `tₖ₊₁ = tₖ + Ts`
 - Update `xₖ₊₁` to the last simulated instant of time `tₖ₊₁`
 """
-function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange, method::KalmanMethod)
+function simulate(stg::Stage, env::Environment, trange::AbstractRange, method::KalmanMethod)
+    ϕ0 = deg2rad(0)
+    θ0 = deg2rad(80)
+    ψ0 = 0
+    q0₀ = calc_q0(ϕ0, θ0, ψ0)
+    q1₀ = calc_q1(ϕ0, θ0, ψ0)
+    q2₀ = calc_q2(ϕ0, θ0, ψ0)
+    q3₀ = calc_q3(ϕ0, θ0, ψ0)
+    sv₀ = [0, 0, -1.5, q0₀, q1₀, q2₀, q3₀, 0.01, 0, 0, 0, 0, 0, 0, 0, 0]
+
     model = DynamicModel(stg)
-    imu = IMUSensor(SVector(-0.4, 0, 0), deg2rad(0.2), 0.2, zeros(SVector{3}), zeros(SVector{3}))
 
     n = 10
     Ts = step(trange)
@@ -46,9 +54,9 @@ function simulate(stg::Stage, env::Environment, sv₀, trange::AbstractRange, me
         sysc = continuousmodel(model, x̂, sv[8], -sv[3], t)
         sysd = c2d(sysc, Ts)
 
-        y = takemeasure(imu, sv, u, stg, env, t)
+        y = takemeasure(sv, u, stg, env, t)
         x̂, P = estimate(x̂, y, u, sysd, P, method)
-        u = control(x̂, sysd)
+        u = control(x̂, sysd, t)
         sol = solve(sv, u, stg, env, range(t, t + Ts, step = dt))
 
         sv_historic[:, 1+(i-1)*n:1+i*n] .= sol

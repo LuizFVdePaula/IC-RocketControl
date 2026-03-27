@@ -17,9 +17,9 @@ and therefore considered part of the structure.
 - `xcm`: Center of mass wrt `body system` (without the propellant).
 """
 struct StructureSubsystem
-    m
-    J
-    xcm
+    m::Float64
+    J::SMatrix{3, 3, Float64, 9}
+    xcm::Float64
 end
 
 function from_dict(dict::AbstractDict)

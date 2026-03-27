@@ -165,6 +165,13 @@ function dynamics(sv, u, stg, env, t)
     pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG - ṁ * re × (ωBG × re))
     δdot = 1 / 0.05 * (SVector{3}(u) - δ)
 
+    # rail constraints
+    if -sv[3] < 5.0
+        quatdot = SVector(0, 0, 0, 0)
+        uvwdot = SVector(max(uvwdot[1], 0.01), uvwdot[2], uvwdot[3])
+        pqrdot = SVector(0, 0, 0)
+    end
+
     return SVector([xyzdot; quatdot; uvwdot; pqrdot; δdot])
 end
 
