@@ -2,5 +2,4 @@ Manifest.toml
 .vscode
 projects/
 test.jl
-analysis.jl
 plotsim.jl

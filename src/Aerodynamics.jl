@@ -191,6 +191,7 @@ struct ActiveAerodynamics{B<:BaseCoefficientsModel, D<:DeflectionCoefficientsMod
     Lref::Float64
     Sref::Float64
     XR::Float64
+    τ::Float64
     base::B
     deflection::D
 end
@@ -261,6 +262,7 @@ function from_dict(dict::AbstractDict)
     Lref = dict["reference_length"]
     Sref = dict["reference_area"]
     XR = dict["reference_position"] / Lref
+    τ = dict["tau"]
     model = dict["model"]
     extrapolation = dict["extrapolation"]
     coeffs = CSV.read(dict["coefficients"], DataFrame)
@@ -276,29 +278,29 @@ function from_dict(dict::AbstractDict)
     end
 
     if model == "interpolated"
-        return from_dict_interpolated(Lref, Sref, XR, coeffs, scheme)
+        return from_dict_interpolated(Lref, Sref, XR, τ, coeffs, scheme)
     elseif model == "symmetric"
-        return from_dict_symmetric(Lref, Sref, XR, coeffs, scheme)
+        return from_dict_symmetric(Lref, Sref, XR, τ, coeffs, scheme)
     else
         throw(KeyError("Aerodynamic model $model not defined."))
     end
 end
 
-function from_dict_interpolated(Lref, Sref, XR, coefs, scheme)
+function from_dict_interpolated(Lref, Sref, XR, τ, coefs, scheme)
     M = coefs.MACH |> unique
     αT = coefs.ALPHA |> unique .|> deg2rad
     ϕA = coefs.PHI |> unique .|> deg2rad
     base = InterpolatedBaseModel(M, αT, ϕA, coefs, scheme)
     deflection = InterpolatedDeflectionModel(M, αT, ϕA, coefs, scheme)
-    return ActiveAerodynamics(Lref, Sref, XR, base, deflection)
+    return ActiveAerodynamics(Lref, Sref, XR, τ, base, deflection)
 end
 
-function from_dict_symmetric(Lref, Sref, XR, coefs, scheme)
+function from_dict_symmetric(Lref, Sref, XR, τ, coefs, scheme)
     M = coefs.MACH |> unique
     αT = coefs.ALPHA |> unique .|> deg2rad
     base = SymmetricBaseModel(M, αT, coefs, scheme)
     deflection = SymmetricDeflectionModel(M, αT, coefs, scheme)
-    return ActiveAerodynamics(Lref, Sref, XR, base, deflection)
+    return ActiveAerodynamics(Lref, Sref, XR, τ, base, deflection)
 end
 
 function interp_coeff(M, αT, ϕA, coef, scheme)

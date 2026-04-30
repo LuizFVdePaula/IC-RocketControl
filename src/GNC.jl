@@ -10,18 +10,18 @@ using ISAtmosphere
 using LinearAlgebra
 using StaticArrays
 
-export DynamicModel, KalmanMethod, takemeasure, continuousmodel, estimate, control
+export DynamicModel, ControlParameters, takemeasure, continuousmodel, estimate, control
 
 """
 Complete state: x = [x, y, z, q₀, q₁, q₂, q₃, u, v, w, p, q, r, δp, δq, δr]
-Estimated state: x̂ = [p, q, r, α, β]
-Measured: z = [p, q, r, v̇, ẇ]
+Estimated state: x̂ = [p, q, r, α, β, δp, δq, δr]
+Measured: z = [p, q, r, v̇, ẇ, δp, δq, δr]
 Control input: u = [up, uq, ur]
 Control law: u = -K ⋅ x̂
 """
 
 function takemeasure(sv, u, stg::Stage, env::Environment, t)
-    # z = [p, q, r, v̇, ẇ]
+    # z = [p, q, r, v̇, ẇ, δp, δq, δr]
     dsv = dynamics(sv, u, stg, env, t)
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
     g = TBG * SVector(0, 0, gravity)
@@ -32,7 +32,9 @@ function takemeasure(sv, u, stg::Stage, env::Environment, t)
     ρ⃗ = stg.imu.r - SVector(xcm, 0, 0)
     as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + stg.imu.σ_accl * SVector{3}(randn(3, 1)) + stg.imu.bias_accl
     ωs = ω + stg.imu.σ_gyro * SVector{3}(randn(3, 1)) + stg.imu.bias_gyro
-    z = SVector{5}([ωs; as[2:3]])
+    δ = SVector{3}(sv[14:16])
+    z = SVector{8}([ωs; as[2:3]; δ]) # encoder is present
+    #z = SVector{5}([ωs; as[2:3]])    # encoder is not present
     return z
 end
 
@@ -49,6 +51,7 @@ struct DynamicModel
     Lref::Float64
     Sref::Float64
     XR::Float64
+    τ::Float64
     m
     xcm
     Jxx
@@ -71,6 +74,7 @@ function DynamicModel(stg::Stage)
         stg.aed.Lref,
         stg.aed.Sref,
         stg.aed.XR,
+        stg.aed.τ,
         t -> stage_mass(stg, t),
         t -> calc_xcm(stg, t),
         t -> getindex(calc_J(stg, t), 1, 1),
@@ -92,6 +96,7 @@ function continuousmodel(dm::DynamicModel, x̂, V, h, t)
     m = dm.m(t)
     Jxx = dm.Jxx(t)
     Jyy = dm.Jyy(t)
+    τ = dm.τ # τ = 2 / ω (for ξ = 1.0)
     k = ρ * V^2 * S / 2
     XCG = dm.xcm(t) / c
     ΔXCG = dm.XR - XCG
@@ -120,42 +125,54 @@ function continuousmodel(dm::DynamicModel, x̂, V, h, t)
     Nβ = k * CYβ / m
     Mδr = k * c / Jyy * Cnδr
     Nδr = k * CYδr / m
-    #TODO: include actuator 1st order dynamics
-    A = [
+
+    Anat = [
         Mp 0  0  0      0
         0  Mq 0  Mα     0
         0  0  Mr 0      Mβ
         0  1  0  Nα / V 0
         0  0  -1 0      Nβ / V
     ]
-    B = [
+    Bnat = [
         Mδp 0       0
         0   Mδq     0
         0   0       Mδr
         0   Nδq / V 0
         0   0       Nδr / V
     ]
-    C = [
+    Cnat = [
         1 0 0  0  0
         0 1 0  0  0
         0 0 1  0  0
         0 0 -V 0  Nβ
         0 V 0  Nα 0
     ]
-    D = [
+    Dnat = [
         0 0   0
         0 0   0
         0 0   0
         0 0   Nδr
         0 Nδq 0
     ]
+
+    Aact = -1 / τ * I(3)
+    Bact = 1 / τ * I(3)
+
+    A = [Anat Bnat; zeros(3, 5) Aact]
+    B = [zeros(5, 3); Bact]
+    C = [Cnat Dnat; zeros(3, 5) I(3)] # encoder is present
+    #C = [Cnat Dnat]                   # encoder is not present
+    D = 0
     return ss(A, B, C, D)
 end
 
-struct KalmanMethod
-    P₀
-    Q
-    R
+struct ControlParameters{T}
+    Ts::T
+    P₀::SMatrix{8, 8, T, 64}
+    Qobs::SMatrix{8, 8, T, 64}
+    Robs::SMatrix{8, 8, T, 64}
+    Qctr::SMatrix{8, 8, T, 64}
+    Rctr::SMatrix{3, 3, T, 9}
 end
 
 """
@@ -169,7 +186,7 @@ Estimate state `x̂ₖ` given previous state estimate `x̂ₖ₋₁`, applied co
 - `uₖ₋₁`: applied control between instants `k - 1` and `k`.
 - `sysd`: discrete-time system model.
 """
-function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::KalmanMethod)
+function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, cp::ControlParameters)
     # x̂ = [p, q, r, α, β]
     A = sysd.A
     B = sysd.B
@@ -177,11 +194,11 @@ function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::Kalm
     D = sysd.D
 
     x̂ₖ⁻ = A * x̂ₖ₋₁ + B * uₖ₋₁
-    Pₖ⁻ = A * Pₖ₋₁ * A' + method.Q
+    Pₖ⁻ = A * Pₖ₋₁ * A' + cp.Qobs
 
     ẑₖ⁻ = H * x̂ₖ⁻  + D * uₖ₋₁
     yₖ = zₖ - ẑₖ⁻
-    S = H * Pₖ⁻ * H' + method.R
+    S = H * Pₖ⁻ * H' + cp.Robs
     K = (Pₖ⁻ * H') / S
 
     #TODO Joseph form
@@ -191,13 +208,15 @@ function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, method::Kalm
     return x̂ₖ⁺, Pₖ⁺
 end
 
-function control(x̂, sysd, t)
+function control(x̂, sysd, t, cp::ControlParameters)
     tref = 1.0
     f = min(t / tref, 1.0)
     # x̂ = [p, q, r, α, β]
-    Q = diagm([1 / deg2rad(3)^2, 1 / deg2rad(3)^2, 1 / deg2rad(3)^2, 1 / deg2rad(1.0)^2, 1 / deg2rad(1.0)^2])
-    R = diagm([1 / deg2rad(30)^2, 1 / deg2rad(30)^2, 1 / deg2rad(30)^2])
-    L = lqr(sysd, Q, R)
+    if t < 1.5 || t > 18
+        L = zeros(3, 8)
+    else
+        L = lqr(sysd, cp.Qctr, cp.Rctr)
+    end
     u = -L * x̂
     δp = clamp(u[1], deg2rad(-10), deg2rad(10))
     δq = clamp(u[2], deg2rad(-10), deg2rad(10))

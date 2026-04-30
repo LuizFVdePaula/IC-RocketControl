@@ -108,7 +108,7 @@ function ∇(f::Function, x₀::AbstractVector)
     m = length(f(x₀))
     n = length(x₀)
     F = zeros(m, n)
-    ε = 1e-8
+    ε = 1e-5
     for col in 1:n
         x₊ = x₀ |> copy |> float
         x₊[col] += ε
@@ -122,7 +122,7 @@ end
 function ∇(f::Function, x₀::Real)
     m = length(f(x₀))
     F = zeros(m)
-    ε = 1e-8
+    ε = 1e-5
     x₊ = x₀ |> copy |> float
     x₊ += ε
     x₋ = x₀ |> copy |> float
@@ -137,7 +137,7 @@ end
 Obtain the time derivative of state vector `sv` subject to deflections `δ` at time instant `t`.
 """
 function dynamics(sv, u, stg, env, t)
-    #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr]
+    #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr, δ̇p, δ̇q, δ̇r]
     #u: [up, uq, ur]
 
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
@@ -162,17 +162,19 @@ function dynamics(sv, u, stg, env, t)
     J = calc_J(stg, t, xcm)
     J̇ = calc_Jdot(stg, t, xcm)
     uvwdot = -ωBG × vBG + F / m + g
-    pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG - ṁ * re × (ωBG × re))
-    δdot = 1 / 0.05 * (SVector{3}(u) - δ)
-
+    pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG + ṁ * re × (ωBG × re))
+    ωn = 70.0 # TODO insert as system input
+    ξ  = 1.0  # TODO insert as system input
+    δdot = sv[17:19]
+    δdotdot = -2 * ξ * ωn * δdot + ωn^2 * (SVector{3}(u) - δ)
     # rail constraints
     if -sv[3] < 5.0
         quatdot = SVector(0, 0, 0, 0)
-        uvwdot = SVector(max(uvwdot[1], 0.01), uvwdot[2], uvwdot[3])
+        uvwdot = SVector(max(uvwdot[1], 0), uvwdot[2], uvwdot[3])
         pqrdot = SVector(0, 0, 0)
     end
 
-    return SVector([xyzdot; quatdot; uvwdot; pqrdot; δdot])
+    return SVector{19}([xyzdot; quatdot; uvwdot; pqrdot; δdot; δdotdot])
 end
 
 end

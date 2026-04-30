@@ -26,7 +26,7 @@ Loop:
 - Simulate from `tₖ` to `tₖ₊₁ = tₖ + Ts`
 - Update `xₖ₊₁` to the last simulated instant of time `tₖ₊₁`
 """
-function simulate(stg::Stage, env::Environment, trange::AbstractRange, method::KalmanMethod)
+function simulate(stg::Stage, env::Environment, cp::ControlParameters)
     ϕ0 = deg2rad(0)
     θ0 = deg2rad(80)
     ψ0 = 0
@@ -34,29 +34,30 @@ function simulate(stg::Stage, env::Environment, trange::AbstractRange, method::K
     q1₀ = calc_q1(ϕ0, θ0, ψ0)
     q2₀ = calc_q2(ϕ0, θ0, ψ0)
     q3₀ = calc_q3(ϕ0, θ0, ψ0)
-    sv₀ = [0, 0, -1.5, q0₀, q1₀, q2₀, q3₀, 0.01, 0, 0, 0, 0, 0, 0, 0, 0]
+    sv₀ = [0, 0, -1.5, q0₀, q1₀, q2₀, q3₀, 0.01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
     model = DynamicModel(stg)
 
     n = 10
-    Ts = step(trange)
+    Ts = cp.Ts
+    trange = range(0, 20, step = Ts)
     dt = Ts / n
     N = length(range(trange[begin], trange[end]; step = dt))
     sv_historic = zeros(length(sv₀), N)
-    x̂_historic = zeros(5, N)
+    x̂_historic = zeros(8, N)
     u_historic = zeros(3, N)
-    y_historic = zeros(5, N)
+    y_historic = zeros(8, N)
     sv = sv₀
-    x̂ = zeros(5)
+    x̂ = zeros(8)
     u = zeros(3)
-    P = method.P₀
+    P = cp.P₀
     for (i, t) ∈ enumerate(trange[begin:end-1])
         sysc = continuousmodel(model, x̂, sv[8], -sv[3], t)
         sysd = c2d(sysc, Ts)
 
         y = takemeasure(sv, u, stg, env, t)
-        x̂, P = estimate(x̂, y, u, sysd, P, method)
-        u = control(x̂, sysd, t)
+        x̂, P = estimate(x̂, y, u, sysd, P, cp)
+        u = control(x̂, sysd, t, cp)
         sol = solve(sv, u, stg, env, range(t, t + Ts, step = dt))
 
         sv_historic[:, 1+(i-1)*n:1+i*n] .= sol

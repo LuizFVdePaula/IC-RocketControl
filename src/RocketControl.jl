@@ -21,7 +21,7 @@ using .Simulate
 
 export Environment, environment, plotinfo
 export Stage, stage
-export DynamicModel, KalmanMethod, continuousmodel
+export DynamicModel, ControlParameters, continuousmodel
 export simulate, postprocess, dynamics, ∇
 
 end
