@@ -26,7 +26,7 @@ The vehicle current state.
 - `q`: Pitch rate
 - `r`: Yaw rate
 """
-mutable struct StateVector{T} <: FieldVector{13, T}
+#= mutable struct StateVector{T} <: FieldVector{13, T}
     φ::T
     λ::T
     h::T
@@ -40,7 +40,7 @@ mutable struct StateVector{T} <: FieldVector{13, T}
     p::T
     q::T
     r::T
-end
+end =#
 
 calc_ϕ(q0, q1, q2, q3) = atan(2 * (q2 * q3 + q0 * q1), q0^2 - q1^2 - q2^2 + q3^2)
 calc_θ(q0, q1, q2, q3) = asin(-2 * (q1 * q3 - q0 * q2))
@@ -50,9 +50,9 @@ calc_ϕ(t13, t23, t33) = acos(t33 / cos(asin(-t13))) * sign(t23)
 calc_θ(t13) = asin(-t13)
 calc_ψ(t11, t12, t13) = acos(t11 / cos(asin(-t13))) * sign(t12)
 
-calc_ϕ(sv::StateVector) = calc_ϕ(sv.q0, sv.q1, sv.q2, sv.q3)
-calc_θ(sv::StateVector) = calc_θ(sv.q0, sv.q1, sv.q2, sv.q3)
-calc_ψ(sv::StateVector) = calc_ψ(sv.q0, sv.q1, sv.q2, sv.q3)
+#calc_ϕ(sv::StateVector) = calc_ϕ(sv.q0, sv.q1, sv.q2, sv.q3)
+#calc_θ(sv::StateVector) = calc_θ(sv.q0, sv.q1, sv.q2, sv.q3)
+#calc_ψ(sv::StateVector) = calc_ψ(sv.q0, sv.q1, sv.q2, sv.q3)
 
 calc_q0(ϕ, θ, ψ) = cos(ψ / 2) * cos(θ / 2) * cos(ϕ / 2) + sin(ψ / 2) * sin(θ / 2) * sin(ϕ / 2)
 calc_q1(ϕ, θ, ψ) = cos(ψ / 2) * cos(θ / 2) * sin(ϕ / 2) - sin(ψ / 2) * sin(θ / 2) * cos(ϕ / 2)
@@ -75,6 +75,6 @@ function rotXYZ(q0, q1, q2, q3)
     return r
 end
 
-rotXYZ(sv::StateVector) = rotXYZ(sv.q0, sv.q1, sv.q2, sv.q3)
+#rotXYZ(sv::StateVector) = rotXYZ(sv.q0, sv.q1, sv.q2, sv.q3)
 
 end

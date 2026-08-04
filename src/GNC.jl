@@ -30,8 +30,8 @@ function takemeasure(sv, u, stg::Stage, env::Environment, t)
     acm = dsv[8:10]
     xcm = calc_xcm(stg, t)
     ρ⃗ = stg.imu.r - SVector(xcm, 0, 0)
-    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + stg.imu.σ_accl * SVector{3}(randn(3, 1)) + stg.imu.bias_accl
-    ωs = ω + stg.imu.σ_gyro * SVector{3}(randn(3, 1)) + stg.imu.bias_gyro
+    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + stg.imu.σ_accl * randn(SVector{3}) + stg.imu.bias_accl
+    ωs = ω + stg.imu.σ_gyro * randn(SVector{3}) + stg.imu.bias_gyro
     δ = SVector{3}(sv[14:16])
     z = SVector{8}([ωs; as[2:3]; δ]) # encoder is present
     #z = SVector{5}([ωs; as[2:3]])    # encoder is not present
@@ -79,13 +79,13 @@ function DynamicModel(stg::Stage)
         t -> calc_xcm(stg, t),
         t -> getindex(calc_J(stg, t), 1, 1),
         t -> getindex(calc_J(stg, t), 2, 2),
-        (getCl(stg.aed, M, 0, 0, dω, 0) - getCl(stg.aed, M, 0, 0, 0, 0)) / dω,
-        (getCl(stg.aed, M, 0, 0, 0, dδ) - getCl(stg.aed, M, 0, 0, 0, 0)) / dδ,
-        (getCm(stg.aed, M, 0, 0, 0, dω, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dω,
-        (getCm(stg.aed, M, dα, 0, 0, 0, 0) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dα,
-        (getCN(stg.aed, M, dα, 0, 0) - getCN(stg.aed, M, 0, 0, 0)) / dα,
-        (getCm(stg.aed, M, 0, 0, 0, 0, dδ) - getCm(stg.aed, M, 0, 0, 0, 0, 0)) / dδ,
-        (getCN(stg.aed, M, 0, 0, dδ) - getCN(stg.aed, M, 0, 0, 0)) / dδ
+        stg.aed.base.Clp(M, 0),
+        stg.aed.deflection.Clδp(M, 0),
+        stg.aed.base.Cmq(M, 0),
+        (stg.aed.base.Cm0(M, dα) - stg.aed.base.Cm0(M, 0)) / dα,
+        (stg.aed.base.CN0(M, dα) - stg.aed.base.CN0(M, 0)) / dα,
+        stg.aed.deflection.Cmδq(M, 0),
+        stg.aed.deflection.CNδq(M, 0)
     )
 end
 

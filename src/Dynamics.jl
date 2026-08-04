@@ -29,7 +29,7 @@ function calc_J(stg::Stage, t_stg, xcm = calc_xcm(stg, t_stg))
     J₀_prp = propellant_inertia_tensor(stg.prp, t_stg)
     m_prp = propellant_mass(stg.prp, t_stg)
     xcm_prp = propellant_center_of_mass(stg.prp, t_stg)
-    J_str = stg.str.J + stg.str.m * (stg.str.xcm - xcm)^2 * Myz # review
+    J_str = stg.str.J + stg.str.m * (stg.str.xcm - xcm)^2 * Myz
     J_prp = J₀_prp + m_prp * (xcm_prp - xcm)^2 * Myz
     J = J_str + J_prp
     return J
@@ -40,7 +40,7 @@ function calc_Jdot(stg::Stage, t_stg, xcm = calc_xcm(stg, t_stg))
     J̇₀_prp = propellant_inertia_tensor_derivative(stg.prp, t_stg)
     ṁ_prp = propellant_mass_derivative(stg.prp, t_stg)
     xcm_prp = propellant_center_of_mass(stg.prp, t_stg)
-    J̇ = J̇₀_prp + ṁ_prp * (xcm - xcm_prp)^2 * Myz # review
+    J̇ = J̇₀_prp + ṁ_prp * (xcm - xcm_prp)^2 * Myz
     return J̇
 end
 
@@ -58,23 +58,16 @@ function aeroloads(h, vBA, ωBA, δ, stg, t_stg)
     M = calc_mach(vBAnorm, h)
     αT = calc_αT(vBA)
     ϕA = calc_ϕA(vBA)
-    TBR = rotX(ϕA)
-    δR = transpose(TBR) * δ
-
-    S = stg.aed.Sref
-    CA = t_stg < stg.prp.tb ? getCAon(stg.aed, M, αT, ϕA, δR[2], δR[3]) : getCAoff(stg.aed, M, αT, ϕA, δR[2], δR[3])
-    CY = getCY(stg.aed, M, αT, ϕA, δR[3])
-    CN = getCN(stg.aed, M, αT, ϕA, δR[2])
-    Faero = q̄ * S * TBR * SVector(CA, CY, CN)
-
     L = stg.aed.Lref
+    S = stg.aed.Sref
     XCG = calc_xcm(stg, t_stg) / L
     ΔXCG = stg.aed.XR - XCG
-    Ωnorm = transpose(TBR) * ωBA * L / (2 * vBAnorm)
-    Cl = getCl(stg.aed, M, αT, ϕA, Ωnorm[1], δR[1])
-    Cm = getCm(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[2], δR[2])
-    Cn = getCn(stg.aed, M, αT, ϕA, ΔXCG, Ωnorm[3], δR[3])
-    Maero = q̄ * S * L * TBR * SVector(Cl, Cm, Cn)
+    ωBAnorm = ωBA * L / (2 * vBAnorm)
+    on = t_stg < stg.prp.tb
+
+    Fcoef, Mcoef = aerodynamic_coefficients(stg.aed, M, αT, ϕA, ΔXCG, ωBAnorm, δ, on)
+    Faero = q̄ * S * Fcoef
+    Maero = q̄ * S * L * Mcoef
 
     return (Faero, Maero)
 end
@@ -170,7 +163,7 @@ function dynamics(sv, u, stg, env, t)
     # rail constraints
     if -sv[3] < 5.0
         quatdot = SVector(0, 0, 0, 0)
-        uvwdot = SVector(max(uvwdot[1], 0), uvwdot[2], uvwdot[3])
+        uvwdot = SVector(max(uvwdot[1], 0), 0, 0)
         pqrdot = SVector(0, 0, 0)
     end
 
