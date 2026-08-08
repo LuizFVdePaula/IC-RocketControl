@@ -1,0 +1,44 @@
+{
+    "Aerodynamics": {
+        "reference_length": 0.0762,
+        "reference_area": 0.00456,
+        "reference_position": -1.0,
+        "model": "symmetric",
+        "extrapolation": "line",
+        "coefficients": "projects/ic_rocket_v2/coefs_ic_v2_rad.csv",
+        "tau": 0.02857
+    },
+    "Propulsion": {
+        "type": "solid",
+        "thrust_curve": "projects/ic_rocket_v2/exp_curve_26_10.csv",
+        "propellant_mass": 1.3,
+        "propellant_density": 1655.0,
+        "propellant_length": 0.214,
+        "propellant_diameter": 0.076,
+        "exit_pressure": 0.97e5,
+        "exit_area": 3.8e-6,
+        "center_of_mass": -1.360,
+        "exit_position_x": -1.550,
+        "exit_position_y": 0.0,
+        "exit_position_z": 0.0,
+        "deflection_angle_z": 0.0,
+        "deflection_angle_y": 0.0
+    },
+    "IMUSensor": {
+        "position": [-1.0, 0.0, 0.0],
+        "sigma_gyro": 0.017,
+        "sigma_accl": 0.15,
+        "bias_gyro": [0.0, 0.0, 0.0],
+        "bias_accl": [0.0, 0.0, 0.0]
+    },
+    "Structure": {
+        "mass": 6.1,
+        "rotational_moment_of_inertia_x": 0.0065,
+        "longitudinal_moment_of_inertia_y": 1.5,
+        "longitudinal_moment_of_inertia_z": 1.5,
+        "cross_product_of_inertia_xy": 0.0,
+        "cross_product_of_inertia_xz": 0.0,
+        "cross_product_of_inertia_yz": 0.0,
+        "center_of_mass": -0.95
+    }
+}

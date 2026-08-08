@@ -86,6 +86,10 @@ end
 
 function loads(sv, δ, stg::Stage, env, t_stg, TBG)
     h = -sv[3]
+    if h < 5.0 # rocket on rail
+        F, M = proploads(h, stg, t_stg)
+        return (F, M)
+    end
     vBG = SVector{3}(sv[8:10])
     ωBG = SVector{3}(sv[11:13])
     vBA = vBG - TBG * windspeed(env, h)
@@ -130,8 +134,8 @@ end
 Obtain the time derivative of state vector `sv` subject to deflections `δ` at time instant `t`.
 """
 function dynamics(sv, u, stg, env, t)
-    #sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr, δ̇p, δ̇q, δ̇r]
-    #u: [up, uq, ur]
+    # sv: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr, δ̇p, δ̇q, δ̇r]
+    # u: [up, uq, ur]
 
     TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
     vBG = SVector{3}(sv[8:10])
@@ -144,9 +148,14 @@ function dynamics(sv, u, stg, env, t)
     quat = SVector{4}(sv[4:7])
     quatdot = 0.5 * Ωquat * quat - 0.5 * quat * (1 - 1 / (transpose(quat) * quat))
 
-    # dynamic equations
+    # actuator dynamics
     δ = SVector{3}(sv[14:16])
-    (F, M) = loads(sv, δ, stg, env, t, TBG)
+    ωn = 70.0 # TODO insert as system input
+    ξ  = 1.0  # TODO insert as system input
+    δdot = sv[17:19]
+    δdotdot = -2 * ξ * ωn * δdot + ωn^2 * (SVector{3}(u) - δ)
+    
+    # rigid body dynamics
     g = TBG * SVector(0, 0, gravity)
     m = stage_mass(stg, t)
     ṁ = calc_mdot(stg.prp, t)
@@ -154,17 +163,21 @@ function dynamics(sv, u, stg, env, t)
     re = stg.prp.re - SVector(xcm, 0, 0)
     J = calc_J(stg, t, xcm)
     J̇ = calc_Jdot(stg, t, xcm)
+
+    (F, M) = loads(sv, δ, stg, env, t, TBG)
     uvwdot = -ωBG × vBG + F / m + g
     pqrdot = J \ (-ωBG × (J * ωBG) + M - J̇ * ωBG + ṁ * re × (ωBG × re))
-    ωn = 70.0 # TODO insert as system input
-    ξ  = 1.0  # TODO insert as system input
-    δdot = sv[17:19]
-    δdotdot = -2 * ξ * ωn * δdot + ωn^2 * (SVector{3}(u) - δ)
-    # rail constraints
-    if -sv[3] < 5.0
+
+    h = -sv[3]
+    if h < 5.0 # rocket on rail
         quatdot = SVector(0, 0, 0, 0)
-        uvwdot = SVector(max(uvwdot[1], 0), 0, 0)
         pqrdot = SVector(0, 0, 0)
+        if t < 0.0
+            uvwdot = SVector(0, 0, 0)
+        else
+            udot = h <= 0.1 ? max(uvwdot[1], 0) : uvwdot[1]
+            uvwdot = SVector(udot, 0, 0)
+        end
     end
 
     return SVector{19}([xyzdot; quatdot; uvwdot; pqrdot; δdot; δdotdot])

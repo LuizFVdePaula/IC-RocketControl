@@ -1,52 +1,18 @@
 module GNC
 
 using ..BaseDefs
-using ..StageDefs: Stage, IMUSensor
+using ..StageDefs: Stage
 using ..EnvironmentDefs
 using ..Aerodynamics
 using ..Dynamics
+using ..Navigation: ESKFState, predict, update_baro, update_pos, update_vel, update_rate
 using ControlSystems
 using ISAtmosphere
 using LinearAlgebra
 using StaticArrays
 
-export DynamicModel, ControlParameters, takemeasure, continuousmodel, estimate, control
+export DynamicModel, ControlParameters, takemeasure, estimate, control
 
-"""
-Complete state: x = [x, y, z, q₀, q₁, q₂, q₃, u, v, w, p, q, r, δp, δq, δr]
-Estimated state: x̂ = [p, q, r, α, β, δp, δq, δr]
-Measured: z = [p, q, r, v̇, ẇ, δp, δq, δr]
-Control input: u = [up, uq, ur]
-Control law: u = -K ⋅ x̂
-"""
-
-function takemeasure(sv, u, stg::Stage, env::Environment, t)
-    # z = [p, q, r, v̇, ẇ, δp, δq, δr]
-    dsv = dynamics(sv, u, stg, env, t)
-    TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
-    g = TBG * SVector(0, 0, gravity)
-    ω = sv[11:13]
-    ω̇ = dsv[11:13]
-    acm = dsv[8:10]
-    xcm = calc_xcm(stg, t)
-    ρ⃗ = stg.imu.r - SVector(xcm, 0, 0)
-    as = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗) + stg.imu.σ_accl * randn(SVector{3}) + stg.imu.bias_accl
-    ωs = ω + stg.imu.σ_gyro * randn(SVector{3}) + stg.imu.bias_gyro
-    δ = SVector{3}(sv[14:16])
-    z = SVector{8}([ωs; as[2:3]; δ]) # encoder is present
-    #z = SVector{5}([ωs; as[2:3]])    # encoder is not present
-    return z
-end
-
-"""
-    DynamicModel
-
-The model used in order to construct the continuous-time system.
-
-Sref, Lref => constant
-m, Jxx, Jyy, xcm => interpolation of time (feedforward)
-Coeff => constant?, consider coeff around XR and transfer Cm inside 'continuousmodel'
-"""
 struct DynamicModel
     Lref::Float64
     Sref::Float64
@@ -68,8 +34,6 @@ end
 function DynamicModel(stg::Stage)
     M = 0.25
     dα = deg2rad(3)
-    dδ = deg2rad(3)
-    dω = deg2rad(2)
     return DynamicModel(
         stg.aed.Lref,
         stg.aed.Sref,
@@ -89,139 +53,150 @@ function DynamicModel(stg::Stage)
     )
 end
 
-function continuousmodel(dm::DynamicModel, x̂, V, h, t)
-    ρ = ρ_kg_m³(p_Pa(h), T_K(h))
-    S = dm.Sref
-    c = dm.Lref
-    m = dm.m(t)
-    Jxx = dm.Jxx(t)
-    Jyy = dm.Jyy(t)
-    τ = dm.τ # τ = 2 / ω (for ξ = 1.0)
-    k = ρ * V^2 * S / 2
-    XCG = dm.xcm(t) / c
-    ΔXCG = dm.XR - XCG
-    Clp = dm.Clp
-    Clδp = dm.Clδp
-    Cmq = dm.Cmq
-    Cmα = dm.Cmα - dm.CNα * ΔXCG
-    CNα = dm.CNα
-    Cmδq = dm.Cmδq #- dm.CNδq * ΔXCG # review in aerodynamic model
-    CNδq = dm.CNδq
-    Cnr = Cmq
-    Cnβ = -Cmα
-    CYβ = CNα
-    Cnδr = Cmδq
-    CYδr = -CNδq
-
-    Mp = k * c^2 / (2 * V * Jxx) * Clp
-    Mδp = k * c / Jxx * Clδp
-    Mq = k * c^2 / (2 * V * Jyy) * Cmq
-    Mα = k * c / Jyy * Cmα
-    Nα = k * CNα / m
-    Mδq = k * c / Jyy * Cmδq
-    Nδq = k * CNδq / m
-    Mr = k * c^2 / (2 * V * Jyy) * Cnr
-    Mβ = k * c / Jyy * Cnβ
-    Nβ = k * CYβ / m
-    Mδr = k * c / Jyy * Cnδr
-    Nδr = k * CYδr / m
-
-    Anat = [
-        Mp 0  0  0      0
-        0  Mq 0  Mα     0
-        0  0  Mr 0      Mβ
-        0  1  0  Nα / V 0
-        0  0  -1 0      Nβ / V
-    ]
-    Bnat = [
-        Mδp 0       0
-        0   Mδq     0
-        0   0       Mδr
-        0   Nδq / V 0
-        0   0       Nδr / V
-    ]
-    Cnat = [
-        1 0 0  0  0
-        0 1 0  0  0
-        0 0 1  0  0
-        0 0 -V 0  Nβ
-        0 V 0  Nα 0
-    ]
-    Dnat = [
-        0 0   0
-        0 0   0
-        0 0   0
-        0 0   Nδr
-        0 Nδq 0
-    ]
-
-    Aact = -1 / τ * I(3)
-    Bact = 1 / τ * I(3)
-
-    A = [Anat Bnat; zeros(3, 5) Aact]
-    B = [zeros(5, 3); Bact]
-    C = [Cnat Dnat; zeros(3, 5) I(3)] # encoder is present
-    #C = [Cnat Dnat]                   # encoder is not present
-    D = 0
-    return ss(A, B, C, D)
-end
-
 struct ControlParameters{T}
-    Ts::T
-    P₀::SMatrix{8, 8, T, 64}
-    Qobs::SMatrix{8, 8, T, 64}
-    Robs::SMatrix{8, 8, T, 64}
-    Qctr::SMatrix{8, 8, T, 64}
-    Rctr::SMatrix{3, 3, T, 9}
+    Ts_imu::T
+    Ts_baro::T
+    # ESKF Parameters
+    Q_eskf::SMatrix{15, 15, T, 225}
+    R_baro::T
+    
+    # Attitude Autopilot Parameters
+    ωn_pitch::T
+    ζ_pitch::T
+    ωn_roll::T
+    ζ_roll::T
+    
+    # Energy Management Target
+    target_apogee::T
 end
 
-"""
-    estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, model)
-
-Estimate state `x̂ₖ` given previous state estimate `x̂ₖ₋₁`, applied control `uₖ₋₁` and current state measure `zₖ`.
-
-# Inputs:
-- `x̂ₖ₋₁`: previous state estimate at instant `k - 1`.
-- `zₖ`: current state measure at instant of estimation `k`.
-- `uₖ₋₁`: applied control between instants `k - 1` and `k`.
-- `sysd`: discrete-time system model.
-"""
-function estimate(x̂ₖ₋₁, zₖ, uₖ₋₁, sysd, Pₖ₋₁, cp::ControlParameters)
-    # x̂ = [p, q, r, α, β]
-    A = sysd.A
-    B = sysd.B
-    H = sysd.C
-    D = sysd.D
-
-    x̂ₖ⁻ = A * x̂ₖ₋₁ + B * uₖ₋₁
-    Pₖ⁻ = A * Pₖ₋₁ * A' + cp.Qobs
-
-    ẑₖ⁻ = H * x̂ₖ⁻  + D * uₖ₋₁
-    yₖ = zₖ - ẑₖ⁻
-    S = H * Pₖ⁻ * H' + cp.Robs
-    K = (Pₖ⁻ * H') / S
-
-    #TODO Joseph form
-
-    Pₖ⁺ = (I - K * H) * Pₖ⁻
-    x̂ₖ⁺ = x̂ₖ⁻ + K * yₖ
-    return x̂ₖ⁺, Pₖ⁺
+function takemeasure(sv, u, stg::Stage, env::Environment, t)
+    dsv = dynamics(sv, u, stg, env, t)
+    TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
+    g = TBG * SVector(0, 0, gravity)
+    ω = SVector{3}(sv[11:13])
+    ω̇ = SVector{3}(dsv[11:13])
+    acm = SVector{3}(dsv[8:10])
+    xcm = calc_xcm(stg, t)
+    ρ⃗ = stg.imu.r - SVector(xcm, 0, 0)
+    
+    # True acceleration at IMU location
+    a_true = acm - g + ω̇ × ρ⃗ + ω × (ω × ρ⃗)
+    
+    # Sensor Noise
+    imu_accel = a_true + stg.imu.σ_accl * randn(SVector{3, Float64}) + stg.imu.bias_accl
+    imu_gyro = ω + stg.imu.σ_gyro * randn(SVector{3, Float64}) + stg.imu.bias_gyro
+    
+    # Barometer (simulate altitude measurement)
+    h_true = -sv[3]
+    baro_h = h_true + 1.0 * randn() # 1m std dev
+    
+    return imu_accel, imu_gyro, baro_h
 end
 
-function control(x̂, sysd, t, cp::ControlParameters)
-    tref = 1.0
-    f = min(t / tref, 1.0)
-    # x̂ = [p, q, r, α, β]
-    if t < 1.5 || t > 18
-        L = zeros(3, 8)
+function estimate(eskf_state::ESKFState, imu_accel, imu_gyro, baro_h, t, is_baro_tick, cp::ControlParameters)
+    # Predict using non-linear kinematics at IMU rate
+    state_pred = predict(eskf_state, imu_accel, imu_gyro, cp.Ts_imu, cp.Q_eskf)
+    
+    if t < 0.0
+        # Pre-launch calibration on the rail
+        # Very high confidence measurements (low noise) for zero states
+        R_pos = SMatrix{3, 3, Float64}(I(3) * 1e-6)
+        R_vel = SMatrix{3, 3, Float64}(I(3) * 1e-6)
+        R_rate = SMatrix{3, 3, Float64}(I(3) * 1e-6)
+        
+        # We know position is [0, 0, -1.5], velocity is 0, angular rate is 0
+        p_meas = SVector(0.0, 0.0, -1.5)
+        v_meas = SVector(0.0, 0.0, 0.0)
+        w_meas = SVector(0.0, 0.0, 0.0)
+        
+        state_upd = update_pos(state_pred, p_meas, R_pos)
+        state_upd = update_vel(state_upd, v_meas, R_vel)
+        state_upd = update_rate(state_upd, w_meas, imu_gyro, R_rate)
+        return state_upd
     else
-        L = lqr(sysd, cp.Qctr, cp.Rctr)
+        if is_baro_tick
+            # In-flight update using Barometer altitude
+            state_upd = update_baro(state_pred, baro_h, cp.R_baro)
+            return state_upd
+        else
+            return state_pred
+        end
     end
-    u = -L * x̂
-    δp = clamp(u[1], deg2rad(-10), deg2rad(10))
-    δq = clamp(u[2], deg2rad(-10), deg2rad(10))
-    δr = clamp(u[3], deg2rad(-10), deg2rad(10))
-    return f * [δp, δq, δr]
+end
+
+function control(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::ControlParameters)
+    # 1. Extract Navigation Data
+    # Angular rates (corrected for estimated bias)
+    p_est, q_est, r_est = imu_gyro - eskf_state.wb
+    
+    # Attitude Angles (extract from ESKF quaternion)
+    ϕ = calc_ϕ(eskf_state.q...)
+    θ = calc_θ(eskf_state.q...)
+    ψ = calc_ψ(eskf_state.q...)
+    
+    # 2. Attitude Error (Target is vertical ascent: θ=80°, ϕ=0, ψ=0)
+    err_ϕ = 0.0 - ϕ
+    err_θ = deg2rad(80) - θ
+    err_ψ = 0.0 - ψ
+    
+    # 3. Dynamic scheduling (Calculate moments effectiveness online)
+    h_est = -eskf_state.p[3]
+    V_est = max(norm(eskf_state.v), 1.0) # Clamp to avoid div by zero
+    ρ = calc_ρ(h_est)
+    q_bar = 0.5 * ρ * V_est^2
+    
+    # Pitch Control Effectiveness
+    M_delta_q = q_bar * dm.Sref * dm.Lref * dm.Cmδq / dm.Jyy(t)
+    M_q = q_bar * dm.Sref * dm.Lref^2 * dm.Cmq / (2 * V_est * dm.Jyy(t))
+    
+    # Roll Control Effectiveness
+    M_delta_p = q_bar * dm.Sref * dm.Lref * dm.Clδp / dm.Jxx(t)
+    M_p = q_bar * dm.Sref * dm.Lref^2 * dm.Clp / (2 * V_est * dm.Jxx(t))
+    
+    # 4. Successive Loop Closure / PD (Adaptive Gains)
+    sign_Mdq = sign(M_delta_q) == 0 ? -1.0 : sign(M_delta_q)
+    Mdq_safe = sign_Mdq * max(abs(M_delta_q), 1e-3)
+    
+    sign_Mdp = sign(M_delta_p) == 0 ? -1.0 : sign(M_delta_p)
+    Mdp_safe = sign_Mdp * max(abs(M_delta_p), 1e-3)
+
+    # Calculate required gains for target natural frequency and damping
+    Kp_pitch = cp.ωn_pitch^2 / Mdq_safe
+    Kd_pitch = (2 * cp.ζ_pitch * cp.ωn_pitch + M_q) / Mdq_safe
+    
+    Kp_roll = cp.ωn_roll^2 / Mdp_safe
+    Kd_roll = (2 * cp.ζ_roll * cp.ωn_roll + M_p) / Mdp_safe
+    
+    # PD Control laws
+    δq_cmd = Kp_pitch * err_θ - Kd_pitch * q_est
+    δr_cmd = Kp_pitch * err_ψ - Kd_pitch * r_est # Yaw uses pitch dynamics (symmetric)
+    δp_cmd = Kp_roll * err_ϕ - Kd_roll * p_est
+    
+    # 5. Apogee Control (Energy Management via Symmetric Drag)
+    δ_d = 0.0
+    if t > 3.0 # Wait for engine burnout (e.g. tb = 3s)
+        # Kinematic apogee prediction
+        h_apogee = h_est + eskf_state.v[3]^2 / (2 * gravity) 
+        
+        # If tracking too high, symmetrically deflect fins to increase drag!
+        if h_apogee > cp.target_apogee && eskf_state.v[3] < 0 # Moving up
+            δ_d = deg2rad(5) # Calculate 5 degrees of drag
+        end
+    end
+    
+    # 6. Final Deflections
+    # We don't apply control on the rail (t < 1.0 or h < 5.0)
+    f_rail = t < 1.5 ? 0.0 : 1.0
+    
+    u_p = clamp(δp_cmd, deg2rad(-10), deg2rad(10)) * f_rail
+    
+    # Note: δ_d is calculated but commented out until the 4-fin bijection mapping 
+    # and aerodynamic coefficients are updated to accept a pure drag command.
+    u_q = clamp(δq_cmd, deg2rad(-10), deg2rad(10)) * f_rail # + δ_d
+    u_r = clamp(δr_cmd, deg2rad(-10), deg2rad(10)) * f_rail # + δ_d
+    
+    return [u_p, u_q, u_r]
 end
 
 end

@@ -1,6 +1,6 @@
 module RK4Solver
 
-export solve
+export solve, solve!
 
 import ..Dynamics: dynamics
 
@@ -24,10 +24,9 @@ Solve (integrate) starting at `sv₀`.
 
 The solution contains every state vector ranging `trange`.
 """
-function solve(sv₀, u, stg, env, trange::AbstractRange)
+function solve!(hist, sv₀, u, stg, env, trange::AbstractRange)
     dt = step(trange)
     N = length(trange)
-    hist = Matrix{eltype(sv₀)}(undef, length(sv₀), N)
     sv = sv₀
     for i ∈ 1:(N-1)
         hist[:, i] = sv
@@ -35,6 +34,13 @@ function solve(sv₀, u, stg, env, trange::AbstractRange)
         sv = nextstatevector(sv, u, stg, env, t, dt)
     end
     hist[:, N] = sv
+    return sv
+end
+
+function solve(sv₀, u, stg, env, trange::AbstractRange)
+    N = length(trange)
+    hist = Matrix{eltype(sv₀)}(undef, length(sv₀), N)
+    solve!(hist, sv₀, u, stg, env, trange)
     return hist
 end
 
