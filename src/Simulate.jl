@@ -19,7 +19,7 @@ using StaticArrays
 Run a full simulation integrating the true dynamics (RK4) while closing the loop 
 at period `Ts` with an ESKF estimator and an Attitude Autopilot.
 """
-function simulate(stg::Stage, env::Environment, cp::ControlParameters)
+function simulate(stg::Stage, env::Environment, cp::ControlParameters; ctrl_func=control_fpa)
     # Initial conditions
     ϕ0 = deg2rad(0)
     θ0 = deg2rad(80)
@@ -30,7 +30,7 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters)
     q3₀ = calc_q3(ϕ0, θ0, ψ0)
     
     # State Vector: [x, y, z, q0, q1, q2, q3, u, v, w, p, q, r, δp, δq, δr, δpdot, δqdot, δrdot]
-    sv₀ = [0.0, 0.0, -1.5, q0₀, q1₀, q2₀, q3₀, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    sv₀ = [0.0, 0.0, 0.0, q0₀, q1₀, q2₀, q3₀, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     model = DynamicModel(stg)
 
@@ -55,12 +55,12 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters)
         fill(0.1^2, 3);           # Position
         fill(0.01^2, 3);          # Velocity
         fill(deg2rad(3)^2, 3);    # Attitude
-        fill(0.01^2, 3);          # Accel bias
+        fill(0.1^2, 3);          # Accel bias
         fill(deg2rad(0.1)^2, 3)   # Gyro bias
     ]))
 
     eskf_state = ESKFState(
-        SVector{3}(0.0, 0.0, -sv[3]),
+        SVector{3}(0.0, 0.0, 0.0),
         SVector{3}(0.0, 0.0, 0.0),
         SVector{4}(q0₀, q1₀, q2₀, q3₀),
         SVector{3}(0.0, 0.0, 0.0),
@@ -85,7 +85,7 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters)
         eskf_state = estimate(eskf_state, imu_accel, imu_gyro, baro_h_hold, t, is_baro_tick, cp)
         
         # 3. Control (runs at IMU rate)
-        u = control(eskf_state, imu_gyro, model, t, cp)
+        u = ctrl_func(eskf_state, imu_gyro, model, t, cp)
         
         # 4. Simulate physics for this step
         sv = solve!(view(sv_historic, :, 1+(i-1)*n:1+i*n), sv, u, stg, env, range(t, t + Ts_imu, step = dt))
@@ -151,19 +151,24 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic
     baro_h = y_historic[7, :]
     
     # True aerodyanmics
-    αT = map(eachcol(sv_historic)) do sv
+    αT = zeros(length(ts))
+    ϕA = zeros(length(ts))
+    γ = zeros(length(ts))
+    vN = zeros(length(ts))
+    vE = zeros(length(ts))
+    vD = zeros(length(ts))
+    for (i, sv) in enumerate(eachcol(sv_historic))
         local h = -sv[3]
         local V = sv[8:10]
         local TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
         local vBA = V - TBG * windspeed(env, h)
-        calc_αT(vBA)
-    end
-    ϕA = map(eachcol(sv_historic)) do sv
-        local h = -sv[3]
-        local V = sv[8:10]
-        local TBG = rotXYZ(sv[4], sv[5], sv[6], sv[7])
-        local vBA = V - TBG * windspeed(env, h)
-        calc_ϕA(vBA)
+        local v_NED = TBG' * V
+        αT[i] = calc_αT(vBA)
+        ϕA[i] = calc_ϕA(vBA)
+        γ[i] = atan(-v_NED[3], sqrt(v_NED[1]^2 + v_NED[2]^2))
+        vN[i] = v_NED[1]
+        vE[i] = v_NED[2]
+        vD[i] = v_NED[3]
     end
     α = @. atan(tan(αT) * cos(ϕA))
     β = @. asin(sin(αT) * sin(ϕA))
@@ -173,14 +178,16 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic
     ur = u_historic[3, :]
     
     df = DataFrame(
-        "x" => x, "y" => y, "h" => h,
-        "q0" => q0, "q1" => q1, "q2" => q2, "q3" => q3,
-        "u" => u, "v" => v, "w" => w,
-        "p" => p, "q" => q, "r" => r,
-        "ϕ" => ϕ, "θ" => θ, "ψ" => ψ,
-        "αT" => αT, "ϕA" => ϕA, "α" => α, "β" => β,
+        "x" => x, "y" => y, "h" => h, "q0" => q0, "q1" => q1, "q2" => q2, "q3" => q3,
+        "u" => u, "v" => v, "w" => w, "p" => p, "q" => q, "r" => r, "ϕ" => ϕ, "θ" => θ, "ψ" => ψ,
+        "vN" => vN, "vE" => vE, "vD" => vD, "αT" => αT, "ϕA" => ϕA, "α" => α, "β" => β, "gamma" => γ,
+        "xobs" => p̂_ned[1, :], "yobs" => p̂_ned[2, :], "hobs" => -p̂_ned[3, :],
+        "ϕobs" => ϕ̂, "θobs" => θ̂, "ψobs" => ψ̂,
+        "vNobs" => v̂_ned[1, :], "vEobs" => v̂_ned[2, :], "vDobs" => v̂_ned[3, :],
+        "abx" => a_bias[1, :], "aby" => a_bias[2, :], "abz" => a_bias[3, :],
+        "wbx" => w_bias[1, :], "wby" => w_bias[2, :], "wbz" => w_bias[3, :],
         "up" => up, "uq" => uq, "ur" => ur, "δp" => δp, "δq" => δq, "δr" => δr,
-        "ϕ̂" => ϕ̂, "θ̂" => θ̂, "ψ̂" => ψ̂, "xobs" => p̂_ned[1, :], "yobs" => p̂_ned[2, :], "hobs" => -p̂_ned[3, :],
+        "imu_ax" => imu_accel_x, "imu_ay" => imu_accel_y, "imu_az" => imu_accel_z,
         "imu_p" => imu_gyro_p, "imu_q" => imu_gyro_q, "imu_r" => imu_gyro_r, "baro_h" => baro_h
     )
     return df

@@ -11,7 +11,7 @@ using ISAtmosphere
 using LinearAlgebra
 using StaticArrays
 
-export DynamicModel, ControlParameters, takemeasure, estimate, control
+export DynamicModel, ControlParameters, takemeasure, estimate, control_pid, control_fpa
 
 struct DynamicModel
     Lref::Float64
@@ -105,8 +105,8 @@ function estimate(eskf_state::ESKFState, imu_accel, imu_gyro, baro_h, t, is_baro
         R_vel = SMatrix{3, 3, Float64}(I(3) * 1e-6)
         R_rate = SMatrix{3, 3, Float64}(I(3) * 1e-6)
         
-        # We know position is [0, 0, -1.5], velocity is 0, angular rate is 0
-        p_meas = SVector(0.0, 0.0, -1.5)
+        # We know position is [0, 0, 0.0], velocity is 0, angular rate is 0
+        p_meas = SVector(0.0, 0.0, 0.0)
         v_meas = SVector(0.0, 0.0, 0.0)
         w_meas = SVector(0.0, 0.0, 0.0)
         
@@ -125,7 +125,7 @@ function estimate(eskf_state::ESKFState, imu_accel, imu_gyro, baro_h, t, is_baro
     end
 end
 
-function control(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::ControlParameters)
+function control_pid(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::ControlParameters)
     # 1. Extract Navigation Data
     # Angular rates (corrected for estimated bias)
     p_est, q_est, r_est = imu_gyro - eskf_state.wb
@@ -195,6 +195,96 @@ function control(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::Contr
     # and aerodynamic coefficients are updated to accept a pure drag command.
     u_q = clamp(δq_cmd, deg2rad(-10), deg2rad(10)) * f_rail # + δ_d
     u_r = clamp(δr_cmd, deg2rad(-10), deg2rad(10)) * f_rail # + δ_d
+    
+    return [u_p, u_q, u_r]
+end
+
+function control_fpa(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::ControlParameters)
+    p_est, q_est, r_est = imu_gyro - eskf_state.wb
+    ϕ = calc_ϕ(eskf_state.q...)
+    θ = calc_θ(eskf_state.q...)
+    ψ = calc_ψ(eskf_state.q...)
+    
+    v_NED = eskf_state.v
+    V_est = max(norm(v_NED), 1.0)
+    
+    # Calculate flight path angle (gamma)
+    v_h = max(sqrt(v_NED[1]^2 + v_NED[2]^2), 0.01)
+    γ_pitch = atan(-v_NED[3], v_h)
+    
+    γ_pitch_ref = deg2rad(80)
+    
+    # Scheduling variables
+    h_est = -eskf_state.p[3]
+    ρ = calc_ρ(h_est)
+    q_bar = 0.5 * ρ * V_est^2
+    m = dm.m(t)
+    Jyy = dm.Jyy(t)
+    ΔXCG = dm.XR - dm.xcm(t)
+    Sref = dm.Sref
+    Lref = dm.Lref
+    CNα = dm.CNα
+    CNδq = dm.CNδq
+    Cmα = dm.Cmα #- ΔXCG * CNα
+    Cmδq = dm.Cmδq #- ΔXCG * CNδq
+
+    Mα = q_bar * Sref * Lref * Cmα / Jyy
+    Nα = q_bar * Sref * CNα / m
+    Mq = q_bar * Sref * Lref^2 * dm.Cmq / (2 * V_est * Jyy)
+    M_delta = q_bar * Sref * Lref * Cmδq / Jyy
+    N_delta = q_bar * Sref * CNδq / m
+    
+    # State space model for longitudinal dynamics: x = [q, θ, γ]
+    A = [
+        Mq   Mα        -Mα;
+        1.0  0.0        0.0;
+        0.0  -Nα/V_est  Nα/V_est
+    ]
+    B = [M_delta; 0.0; -N_delta/V_est]
+    
+    δq_cmd = 0.0
+    δr_cmd = 0.0
+    
+    if norm(B) > 1e-5
+        # LQR Synthesis
+        Q = diagm([20, 150, 300.0]) # Penalize gamma error heavily
+        R_lqr = 10.0
+        sysc = ss(A, B, I(3), 0)
+        sysd = c2d(sysc, cp.Ts_imu)
+        # Calculate optimal gain K
+        K = lqr(sysd, Q, R_lqr)
+        
+        # Pitch tracking (FPA Controller)
+        x_pitch_err = [q_est, θ - γ_pitch_ref, γ_pitch - γ_pitch_ref]
+        δq_cmd = -(K * x_pitch_err)[1]
+    end
+    
+    # Yaw (PID, since lateral FPA is singular during vertical ascent)
+    err_ψ = 0.0 - ψ
+    # Yaw uses pitch dynamics (symmetric rocket)
+    sign_Mdq = sign(M_delta) == 0 ? -1.0 : sign(M_delta)
+    Mdq_safe = sign_Mdq * max(abs(M_delta), 1e-3)
+    Kp_yaw = cp.ωn_pitch^2 / Mdq_safe
+    Kd_yaw = (2 * cp.ζ_pitch * cp.ωn_pitch + Mq) / Mdq_safe
+    δr_cmd = Kp_yaw * err_ψ - Kd_yaw * r_est
+    
+    # Roll (PID, since there's no FPA for roll)
+    err_ϕ = 0.0 - ϕ
+    Jxx = dm.Jxx(t)
+    M_delta_p = q_bar * dm.Sref * dm.Lref * dm.Clδp / Jxx
+    M_p = q_bar * dm.Sref * dm.Lref^2 * dm.Clp / (2 * V_est * Jxx)
+    
+    sign_Mdp = sign(M_delta_p) == 0 ? -1.0 : sign(M_delta_p)
+    Mdp_safe = sign_Mdp * max(abs(M_delta_p), 1e-3)
+    Kp_roll = cp.ωn_roll^2 / Mdp_safe
+    Kd_roll = (2 * cp.ζ_roll * cp.ωn_roll + M_p) / Mdp_safe
+    δp_cmd = Kp_roll * err_ϕ - Kd_roll * p_est
+    
+    # Final Deflections
+    f_rail = t < 1.5 ? 0.0 : 1.0
+    u_p = clamp(δp_cmd, deg2rad(-10), deg2rad(10)) * f_rail
+    u_q = clamp(δq_cmd, deg2rad(-10), deg2rad(10)) * f_rail
+    u_r = clamp(δr_cmd, deg2rad(-10), deg2rad(10)) * f_rail
     
     return [u_p, u_q, u_r]
 end

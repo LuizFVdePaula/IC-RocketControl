@@ -4,7 +4,7 @@ using StaticArrays
 using ControlSystems
 
 ## 1. Load the stage and environment
-rkt = stage("projects/ic_rocket_v2/ic_rocket_v2.json");
+rkt = stage("projects/ic_rocket_fin/ic_rocket_fin.json");
 env = environment("projects/environment/env_model.json");
 
 # 2. Setup the ESKF noise matrices
@@ -29,7 +29,7 @@ Q_vec = [
 Q_eskf = SMatrix{15, 15, Float64}(diagm(Q_vec))
 
 # ESKF Measurement Noise
-R_baro = 5.0^2 # 5m standard deviation on barometer
+R_baro = 2.0^2 # 2 m standard deviation on barometer
 
 # 3. Setup the Attitude Autopilot Parameters
 # We target a highly damped, fast response
@@ -54,12 +54,10 @@ params = ControlParameters(
     target_apogee
 )
 
-println("Starting simulation...")
-# 5. Run the simulation
+##
+
 sim, control_hist, est, meas = simulate(rkt, env, params)
 
-println("Simulation complete. Post-processing...")
-# 6. Post-process the results
 ts = range(-10.0, 20.0, step = Ts_imu) # Step matches Ts_imu exactly
 res = postprocess(rkt, env, sim, control_hist, est, meas, ts)
 
@@ -68,7 +66,7 @@ println("\n=== Simulation Results ===")
 println("Max Altitude: ", maximum(res.h), " m")
 println("Max Speed: ", maximum(sqrt.(res.u.^2 .+ res.v.^2 .+ res.w.^2)), " m/s")
 println("Final Attitude (θ): ", rad2deg(res.θ[end]), " deg")
-println("Final Estimated Attitude (θ̂): ", rad2deg(res.θ̂[end]), " deg")
+println("Final Estimated Attitude (θ̂): ", rad2deg(res.θobs[end]), " deg")
 
 ##
 
@@ -76,19 +74,16 @@ include("plotsim.jl")
 
 plot_performance(res, ts)
 plot_observer(res, ts)
+plot_observer_bias(res, rkt, ts)
+plot_control(res, ts)
 
 ##
 
-fig_pos = Figure(size = (1200, 800))
+γobs = @. atan(-res.vDobs, sqrt(res.vNobs^2 + res.vEobs^2))
 
-ax_pos_x = Axis(fig_pos[1, 1], xlabel = "Time [s]", ylabel = "Position X [m]")
-lines!(ax_pos_x, ts, res.x, label = "Position X", linewidth = 2)
-lines!(ax_pos_x, ts, res.xobs, label = "Estimated X", linewidth = 2)
-axislegend(ax_pos_x)
+fig_gamma = Figure(size = (1200, 800))
 
-ax_pos_y = Axis(fig_pos[1, 2], xlabel = "Time [s]", ylabel = "Position Y [m]")
-lines!(ax_pos_y, ts, res.y, label = "Position Y", linewidth = 2)
-lines!(ax_pos_y, ts, res.yobs, label = "Estimated Y", linewidth = 2)
-axislegend(ax_pos_y)
-
-display(fig_pos)
+ax_gamma = Axis(fig_gamma[1, 1], xlabel = "Time [s]", ylabel = "Flight Path Angle γ [deg]")
+lines!(ax_gamma, ts, rad2deg.(res.gamma), label = "True γ", linewidth = 2)
+lines!(ax_gamma, ts, rad2deg.(γobs), label = "Estimated γ", linewidth = 2)
+display(fig_gamma)
