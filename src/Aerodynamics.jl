@@ -68,7 +68,8 @@ struct ActiveAerodynamics
     Lref::Float64
     Sref::Float64
     XR::Float64
-    τ::Float64
+    ω::Float64
+    ξ::Float64
     base::SymmetricBaseModel
     deflection::SymmetricDeflectionModel
 end
@@ -131,7 +132,8 @@ function from_dict(dict::AbstractDict)
     Lref = dict["reference_length"]
     Sref = dict["reference_area"]
     XR = dict["reference_position"] / Lref
-    τ = dict["tau"]
+    ω = dict["actuator_omega"]
+    ξ = dict["actuator_xi"]
     model = dict["model"]
     extrapolation = dict["extrapolation"]
     coeffs = CSV.read(dict["coefficients"], DataFrame)
@@ -147,18 +149,18 @@ function from_dict(dict::AbstractDict)
     end
 
     if model == "symmetric"
-        return from_dict_symmetric(Lref, Sref, XR, τ, coeffs, scheme)
+        return from_dict_symmetric(Lref, Sref, XR, ω, ξ, coeffs, scheme)
     else
         throw(KeyError("Aerodynamic model $model not defined."))
     end
 end
 
-function from_dict_symmetric(Lref, Sref, XR, τ, coefs, scheme)
+function from_dict_symmetric(Lref, Sref, XR, ω, ξ, coefs, scheme)
     M = coefs.MACH |> unique
     αT = coefs.ALPHA |> unique .|> deg2rad
     base = SymmetricBaseModel(M, αT, coefs, scheme)
     deflection = SymmetricDeflectionModel(M, αT, coefs, scheme)
-    return ActiveAerodynamics(Lref, Sref, XR, τ, base, deflection)
+    return ActiveAerodynamics(Lref, Sref, XR, ω, ξ, base, deflection)
 end
 
 function interp_coeff(M, αT, coef, scheme)
@@ -171,7 +173,7 @@ function from_montecarlo(aed::ActiveAerodynamics, σCA)
     fCA = 1 + randn() * σCA
     base_mc.CAon.itp.coefs .*= fCA
     base_mc.CAoff.itp.coefs .*= fCA
-    return ActiveAerodynamics(aed.Lref, aed.Sref, aed.XR, base_mc)
+    return ActiveAerodynamics(aed.Lref, aed.Sref, aed.XR, aed.ωn, aed.ξ, base_mc)
 end
 
 end

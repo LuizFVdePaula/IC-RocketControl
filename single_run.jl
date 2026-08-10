@@ -8,8 +8,9 @@ rkt = stage("projects/ic_rocket_fin/ic_rocket_fin.json");
 env = environment("projects/environment/env_model.json");
 
 # 2. Setup the ESKF noise matrices
-Ts_imu = 0.002
-Ts_baro = 0.010
+Ts_imu = 0.002     # 500 Hz
+Ts_baro = 0.010    # 100 Hz
+Ts_control = 0.020 # 50 Hz control loop
 
 # ESKF Process Noise (Q_eskf) for 15 error states:
 # [δp (3), δv (3), δθ (3), δab (3), δwb (3)]
@@ -45,6 +46,7 @@ target_apogee = 1000.0 # meters
 params = ControlParameters(
     Ts_imu,
     Ts_baro,
+    Ts_control,
     Q_eskf,
     R_baro,
     ωn_pitch,
@@ -60,6 +62,8 @@ sim, control_hist, est, meas = simulate(rkt, env, params)
 
 ts = range(-10.0, 20.0, step = Ts_imu) # Step matches Ts_imu exactly
 res = postprocess(rkt, env, sim, control_hist, est, meas, ts)
+res_flight = res[5001:end, :]
+ts_flight = ts[5001:end]
 
 # Display some final statistics
 println("\n=== Simulation Results ===")
@@ -72,10 +76,10 @@ println("Final Estimated Attitude (θ̂): ", rad2deg(res.θobs[end]), " deg")
 
 include("plotsim.jl")
 
-plot_performance(res, ts)
+plot_performance(res_flight, ts_flight)
 plot_observer(res, ts)
 plot_observer_bias(res, rkt, ts)
-plot_control(res, ts)
+plot_control(res_flight, ts_flight)
 
 ##
 

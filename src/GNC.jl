@@ -38,7 +38,7 @@ function DynamicModel(stg::Stage)
         stg.aed.Lref,
         stg.aed.Sref,
         stg.aed.XR,
-        stg.aed.τ,
+        0.0,
         t -> stage_mass(stg, t),
         t -> calc_xcm(stg, t),
         t -> getindex(calc_J(stg, t), 1, 1),
@@ -56,6 +56,7 @@ end
 struct ControlParameters{T}
     Ts_imu::T
     Ts_baro::T
+    Ts_control::T
     # ESKF Parameters
     Q_eskf::SMatrix{15, 15, T, 225}
     R_baro::T
@@ -245,19 +246,17 @@ function control_fpa(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::C
     δq_cmd = 0.0
     δr_cmd = 0.0
     
-    if norm(B) > 1e-5
-        # LQR Synthesis
-        Q = diagm([20, 150, 300.0]) # Penalize gamma error heavily
-        R_lqr = 10.0
-        sysc = ss(A, B, I(3), 0)
-        sysd = c2d(sysc, cp.Ts_imu)
-        # Calculate optimal gain K
-        K = lqr(sysd, Q, R_lqr)
-        
-        # Pitch tracking (FPA Controller)
-        x_pitch_err = [q_est, θ - γ_pitch_ref, γ_pitch - γ_pitch_ref]
-        δq_cmd = -(K * x_pitch_err)[1]
-    end
+    # LQR Synthesis
+    Q = diagm([3, 200, 200.0]) # Penalize gamma error heavily
+    R_lqr = 50.0
+    sysc = ss(A, B, I(3), 0)
+    sysd = c2d(sysc, cp.Ts_control)
+    # Calculate optimal gain K
+    K = lqr(sysd, Q, R_lqr)
+    
+    # Pitch tracking (FPA Controller)
+    x_pitch_err = [q_est, θ - γ_pitch_ref, γ_pitch - γ_pitch_ref]
+    δq_cmd = -(K * x_pitch_err)[1]
     
     # Yaw (PID, since lateral FPA is singular during vertical ascent)
     err_ψ = 0.0 - ψ

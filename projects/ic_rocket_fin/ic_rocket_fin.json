@@ -6,7 +6,8 @@
         "model": "symmetric",
         "extrapolation": "line",
         "coefficients": "projects/ic_rocket_fin/coefficients_ic_fin_rad.csv",
-        "tau": 0.02857
+        "actuator_omega": 70.0,
+        "actuator_xi": 0.74
     },
     "Propulsion": {
         "type": "solid",

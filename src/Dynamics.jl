@@ -150,8 +150,8 @@ function dynamics(sv, u, stg, env, t)
 
     # actuator dynamics
     δ = SVector{3}(sv[14:16])
-    ωn = 70.0 # TODO insert as system input
-    ξ  = 1.0  # TODO insert as system input
+    ωn = stg.aed.ω
+    ξ = stg.aed.ξ
     δdot = sv[17:19]
     δdotdot = -2 * ξ * ωn * δdot + ωn^2 * (SVector{3}(u) - δ)
     

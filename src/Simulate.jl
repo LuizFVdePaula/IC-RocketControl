@@ -69,6 +69,7 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters; ctrl_func
     )
     
     ticks_per_baro = round(Int, cp.Ts_baro / cp.Ts_imu)
+    ticks_per_control = round(Int, cp.Ts_control / cp.Ts_imu)
     baro_h_hold = -sv[3]
 
     for (i, t) ∈ enumerate(trange[begin:end-1])
@@ -84,8 +85,11 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters; ctrl_func
         # 2. ESKF Estimate
         eskf_state = estimate(eskf_state, imu_accel, imu_gyro, baro_h_hold, t, is_baro_tick, cp)
         
-        # 3. Control (runs at IMU rate)
-        u = ctrl_func(eskf_state, imu_gyro, model, t, cp)
+        # 3. Control (runs at Control rate)
+        is_control_tick = (i - 1) % ticks_per_control == 0
+        if is_control_tick
+            u = ctrl_func(eskf_state, imu_gyro, model, t, cp)
+        end
         
         # 4. Simulate physics for this step
         sv = solve!(view(sv_historic, :, 1+(i-1)*n:1+i*n), sv, u, stg, env, range(t, t + Ts_imu, step = dt))
