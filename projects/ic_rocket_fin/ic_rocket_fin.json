@@ -22,8 +22,8 @@
         "exit_position_x": -1.870,
         "exit_position_y": 0.0,
         "exit_position_z": 0.0,
-        "deflection_angle_z": 0.0,
-        "deflection_angle_y": 0.0
+        "deflection_angle_z": 0.1,
+        "deflection_angle_y": 0.1
     },
     "IMUSensor": {
         "position": [-1.0, 0.0, 0.0],

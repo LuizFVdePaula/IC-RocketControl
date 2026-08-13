@@ -88,7 +88,11 @@ function simulate(stg::Stage, env::Environment, cp::ControlParameters; ctrl_func
         # 3. Control (runs at Control rate)
         is_control_tick = (i - 1) % ticks_per_control == 0
         if is_control_tick
-            u = ctrl_func(eskf_state, imu_gyro, model, t, cp)
+            if isnothing(ctrl_func)
+                u = [0.0, 0.0, 0.0]
+            else
+                u = ctrl_func(eskf_state, imu_gyro, model, t, cp)
+            end
         end
         
         # 4. Simulate physics for this step

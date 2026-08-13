@@ -2,101 +2,99 @@ using RocketControl
 using CairoMakie
 using ControlSystems
 using LinearAlgebra
+using ISAtmosphere
 
 ##
 
-rkt = stage("projects/ic_rocket_v2/ic_rocket_v2.json");
+rkt = stage("projects/ic_rocket_fin/ic_rocket_fin.json");
 env = environment("projects/environment/test_env.json");
 
-## Flight conditions and reference variables
+## Reference variables
 
-V_cond = [90, 120];
-h_cond = [100, 500];
-t_cond = [1.5, 3.0];
-ρ_cond = [1.213, 1.167];
+Vref = 100;
+href = 100;
+tref = 2;
+ρref = ρ_kg_m³(p_Pa(href), T_K(href));
 
-cond = 1
-Vref = V_cond[cond]
-href = h_cond[cond]
-tref = t_cond[cond]
-ρref = ρ_cond[cond]
+dm = RocketControl.DynamicModel(rkt);
 
-## System build
-model = RocketControl.GNC.DynamicModel(rkt);
-Ts = 0.01
-f = 0.5 * ρref * Vref^2 * rkt.aed.Sref
-Mp = f * model.Lref^2 / (2 * model.Jxx(tref) * Vref) * model.Clp
-Mδp = f * model.Lref / model.Jxx(tref) * model.Clδp
-τ = model.τ
+##
 
-A = [Mp Mδp; 0 -1 / τ]
-B = [0; 1 / τ]
-C = I(2)
+q_bar = 0.5 * ρref * Vref^2
+m = dm.m(tref)
+Jxx = dm.Jxx(tref)
+Sref = dm.Sref
+Lref = dm.Lref
+Clp = dm.Clp
+Clδp = dm.Clδp
+Lp = q_bar * Sref * Lref^2 * Clp / (2 * Vref * Jxx)
+Lδp = q_bar * Sref * Lref * Clδp / Jxx
+
+Ts = 0.02
+A = [0 1; 0 Lp]
+B = [0; Lδp]
+C = [1 0]
 sysc = ss(A, B, C, 0)
 sys = c2d(sysc, Ts)
 
-## LQR design
+##
 
-Q = diagm([1 / deg2rad(10)^2, 1 / deg2rad(1)^2])
-R = 1 / deg2rad(10)^2
-L = lqr(sys, Q, R)
+ω_roll_desired = 2π * 1.5
+ξ_roll_desired = 0.707
+poles_continuous = ω_roll_desired * [-ξ_roll_desired + im * sqrt(1 - ξ_roll_desired^2), -ξ_roll_desired - im * sqrt(1 - ξ_roll_desired^2)]
+poles_discrete = exp.(poles_continuous * Ts)
 
-## Kalman filter design
+#continuous: Kϕ = ω_roll_desired^2 / Lδp
+#continuous: Kp = (2 * ξ_roll_desired * ω_roll_desired + Lp) / Lδp
 
-σ = diagm([(1.4)^2, deg2rad(10)^2])
-G = I(2)
-R1 = c2d(sys, G * σ * G'; opt = :o)
-R2 = diagm([deg2rad(1)^2, deg2rad(1)^2])
-K = kalman(sys, R1, R2; direct = true)
+K = place(sys, poles_discrete)
+K_ϕ_nom = K[1]
+K_p_nom = K[2]
+K_lqr = lqr(sys, diagm([1 / 3^2, 1 / 30^2]), 1 / 0.3^2)
 
-## Linear simulation
+## Root locus plot for Successive Loop Closure
 
-cont = observer_controller(sys, L, K; direct = true)
-syscl = feedback(sys, cont)
-resx = lsim(syscl, (x, t) -> 0, 0:0.01:0.4; x0 = [deg2rad(15), 0, 0, 0])
+fig = Figure(size = (500, 400), fontsize = 16)
+ax = Axis(fig[1, 1], xlabel = "Real", ylabel = "Imaginary", aspect = DataAspect(), yticks = -0.2:0.1:0.2, limits = ((0.45, 1.05), (-0.25, 0.25)))
 
-## Simulation result
+# Plot Unit Circle
+θ_circle = range(0, 2π, length = 200)
+lines!(ax, cos.(θ_circle), sin.(θ_circle), color = :gray, linestyle = :dash)
 
-x̂ = resx.x[3:4, :] + K * resx.x[1:2, :]
+# 1. Inner Loop: Roll Rate (p) Feedback
+# Plant: u -> p
+sys_p = ss(sys.A, sys.B, [0 1], 0, Ts)
+Kp_range = range(0, 2 * K_p_nom, length = 200)
+roots_p, _, _ = rlocus(sys_p, Kp_range)
 
-fig = Figure(size = (900, 600))
+lines!(ax, real(roots_p[:, 1]), imag(roots_p[:, 1]), color = :blue, label = "Inner Loop (p)")
+lines!(ax, real(roots_p[:, 2]), imag(roots_p[:, 2]), color = :blue)
 
-ax1 = Axis(fig[1, 1])
-lines!(ax1, resx.t, resx.x[1, :], label = "p")
-lines!(ax1, resx.t, x̂[1, :], label = "p̂")
-axislegend(ax1)
+# Plot the pole locations when the inner loop is closed with K_p_nom
+A_inner = sys.A - sys.B * [0 K_p_nom]
+poles_inner = pole(ss(A_inner, sys.B, [0 1], 0, Ts))
+scatter!(ax, real(poles_inner), imag(poles_inner), marker = :diamond, color = :blue, markersize = 15, label = "Inner Closed (Kp)")
 
-ax2 = Axis(fig[1, 2])
-lines!(ax2, resx.t, resx.x[2, :], label = "δp")
-lines!(ax2, resx.t, x̂[2, :], label = "δp̂")
-axislegend(ax2)
+# 2. Outer Loop: Roll Angle (ϕ) Feedback
+# Plant: ϕ_cmd -> ϕ, with the inner loop closed!
+sys_ϕ = ss(A_inner, sys.B, [1 0], 0, Ts)
+Kϕ_range = range(0, 2 * K_ϕ_nom, length=200)
+roots_ϕ, _, _ = rlocus(sys_ϕ, Kϕ_range)
 
-fig
+lines!(ax, real(roots_ϕ[:, 1]), imag(roots_ϕ[:, 1]), color = :red, label = "Outer Loop (ϕ)")
+lines!(ax, real(roots_ϕ[:, 2]), imag(roots_ϕ[:, 2]), color = :red)
 
-## Root locus plot
+# Plot the final desired poles
+scatter!(ax, real(poles_discrete), imag(poles_discrete), marker = :circle, color = :black, markersize = 15, label = "Final Poles (Kϕ)")
 
-#ρs = (10).^range(-4, 2, length = 100)
-ρs = range(1 / deg2rad(15)^2, 1 / deg2rad(1)^2, 100)
-root_locus = zeros(ComplexF64, (length(ρs), 2))
+# Plot curve of ξ = 0.707
+r_ξ = 0.01:0.01:1
+θ_ξ = -sqrt(1 - ξ_roll_desired^2) / ξ_roll_desired * log.(r_ξ)
+x_ξ = r_ξ .* cos.(θ_ξ)
+y_ξ = r_ξ .* sin.(θ_ξ)
+lines!(ax, x_ξ, y_ξ, label = "ξ = 0.707", linestyle = :dash, color = :green)
 
-for (i, ρ) in enumerate(ρs)
-    L = lqr(sys, diagm([1 / deg2rad(10)^2, ρ]), R)
-    λs = eigvals(sys.A - sys.B * L)
-    root_locus[i, :] = λs
-end
+axislegend(ax, position = :lb)
+save("results/roll_root_locus.pdf", fig)
+display(fig)
 
-fig = Figure(size = (800, 800))
-ax = Axis(fig[1, 1], title = "Discrete LQR Root Locus", xlabel = "Real", ylabel = "Imag", aspect = DataAspect())
-
-θun = range(0, 2π, length = 100)
-lines!(ax, cos.(θun), sin.(θun), color = :black, linestyle = :dash)
-
-scatterlines!(ax, real(root_locus[:, 1]), imag(root_locus[:, 1]), markersize = 5, label = "λ1")
-scatterlines!(ax, real(root_locus[:, 2]), imag(root_locus[:, 2]), markersize = 5, label = "λ2")
-
-λ0 = eigvals(sys.A)
-scatter!(ax, real(λ0[1]), imag(λ0[1]), marker = :circle, markersize = 10, label = "Open Loop λ₁")
-scatter!(ax, real(λ0[2]), imag(λ0[2]), marker = :circle, markersize = 10, label = "Open Loop λ₂")
-
-axislegend(ax)
-fig

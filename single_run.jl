@@ -37,8 +37,8 @@ R_baro = 2.0^2 # 2 m standard deviation on barometer
 ωn_pitch = 5.0 # rad/s
 ζ_pitch = 0.7
 
-ωn_roll = 8.0 # rad/s
-ζ_roll = 0.7
+ωn_roll = 7.0 # rad/s
+ζ_roll = 0.9
 
 target_apogee = 1000.0 # meters
 
@@ -56,21 +56,18 @@ params = ControlParameters(
     target_apogee
 )
 
-##
-
-sim, control_hist, est, meas = simulate(rkt, env, params)
+## Simulation
 
 ts = range(-10.0, 20.0, step = Ts_imu) # Step matches Ts_imu exactly
-res = postprocess(rkt, env, sim, control_hist, est, meas, ts)
-res_flight = res[5001:end, :]
 ts_flight = ts[5001:end]
 
-# Display some final statistics
-println("\n=== Simulation Results ===")
-println("Max Altitude: ", maximum(res.h), " m")
-println("Max Speed: ", maximum(sqrt.(res.u.^2 .+ res.v.^2 .+ res.w.^2)), " m/s")
-println("Final Attitude (θ): ", rad2deg(res.θ[end]), " deg")
-println("Final Estimated Attitude (θ̂): ", rad2deg(res.θobs[end]), " deg")
+sim, control_hist, est, meas = simulate(rkt, env, params)
+res = postprocess(rkt, env, sim, control_hist, est, meas, ts)
+res_flight = res[5001:end, :]
+
+sim_nc, control_hist_nc, est_nc, meas_nc = simulate(rkt, env, params, ctrl_func = nothing)
+res_nc = postprocess(rkt, env, sim_nc, control_hist_nc, est_nc, meas_nc, ts)
+res_flight_nc = res_nc[5001:end, :]
 
 ##
 
@@ -91,3 +88,37 @@ ax_gamma = Axis(fig_gamma[1, 1], xlabel = "Time [s]", ylabel = "Flight Path Angl
 lines!(ax_gamma, ts, rad2deg.(res.gamma), label = "True γ", linewidth = 2)
 lines!(ax_gamma, ts, rad2deg.(γobs), label = "Estimated γ", linewidth = 2)
 display(fig_gamma)
+
+## Final plots
+
+using CairoMakie
+
+fig_final = Figure(size = (600, 900))
+
+ax_fpa = Axis(fig_final[1, 1], ylabel = "FPA γ [deg]", limits = (nothing, (0, 90)))
+lines!(ax_fpa, ts_flight, rad2deg.(res_flight.gamma), label = "Controlled")
+lines!(ax_fpa, ts_flight, rad2deg.(res_flight_nc.gamma), label = "NC", linestyle = :dash)
+hlines!(ax_fpa, 80.0, linestyle = :dot, color = :black, label = "Reference")
+#axislegend(ax_fpa)
+
+ax_roll = Axis(fig_final[2, 1], ylabel = "Roll Angle ϕ [deg]")
+lines!(ax_roll, ts_flight, rad2deg.(res_flight.ϕ), label = "Controlled")
+lines!(ax_roll, ts_flight, rad2deg.(res_flight_nc.ϕ), label = "NC", linestyle = :dash)
+#axislegend(ax_roll)
+
+ax_uq = Axis(fig_final[3, 1], ylabel = "Pitch Deflection [deg]")
+lines!(ax_uq, ts_flight, rad2deg.(res_flight.δq), label = "Controlled")
+lines!(ax_uq, ts_flight, rad2deg.(res_flight_nc.δq), label = "NC", linestyle = :dash)
+#axislegend(ax_uq)
+
+ax_up = Axis(fig_final[4, 1], ylabel = "Roll Deflection [deg]")
+lines!(ax_up, ts_flight, rad2deg.(res_flight.δp), label = "Controlled")
+lines!(ax_up, ts_flight, rad2deg.(res_flight_nc.δp), label = "NC", linestyle = :dash)
+#axislegend(ax_up)
+
+ax_V = Axis(fig_final[5, 1], ylabel = "Total Speed [m/s]")
+lines!(ax_V, ts_flight, (@. sqrt(res_flight.u^2 + res_flight.v^2 + res_flight.w^2)), label = "Controlled")
+lines!(ax_V, ts_flight, (@. sqrt(res_flight_nc.u^2 + res_flight_nc.v^2 + res_flight_nc.w^2)), label = "NC", linestyle = :dash)
+#axislegend(ax_V)
+
+display(fig_final)

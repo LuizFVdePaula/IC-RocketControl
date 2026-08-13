@@ -85,10 +85,14 @@ println("Discrete Open Loop Poles: ", ol_poles)
 println("Absolute values: ", abs.(ol_poles))
 
 ## LQR Root Locus (varying R)
-Q_lqr = diagm([3, 200, 200.0])
-R_vals = 10 .^ range(1, 4, length=200)
+Q_lqr = diagm([1.3, 30, 800.0])
+R_vals = 10 .^ range(1, 4, length = 300)
 
 poles = zeros(ComplexF64, 3, length(R_vals))
+
+R_nom = 48.0
+K_nom = lqr(sysd, Q_lqr, R_nom)
+cl_poles_nom = pole(ss(sysd.A - sysd.B * K_nom, sysd.B, sysd.C, sysd.D, sysd.Ts))
 
 for (i, R_val) in enumerate(R_vals)
     K = lqr(sysd, Q_lqr, R_val)
@@ -96,24 +100,21 @@ for (i, R_val) in enumerate(R_vals)
     poles[:, i] = pole(cl_sys)
 end
 
-fig_rl = Figure(size = (600, 600), fontsize = 16)
-ax_rl = Axis(fig_rl[1, 1], xlabel = "Real", ylabel = "Imaginary", title = "Discrete LQR Root Locus", aspect = DataAspect(), limits = ((0.3, 1.1), (-0.4, 0.4)))
-
-# Plot Unit Circle
-θ_circle = range(0, 2π, length=200)
-lines!(ax_rl, cos.(θ_circle), sin.(θ_circle), color = :gray, linestyle = :dash, label = "Unit Circle")
-scatter!(ax_rl, real.(ol_poles), imag.(ol_poles), marker = :x, color = :black, markersize = 12, label = "OL Poles")
+fig_rl = Figure(size = (500, 400), fontsize = 16)
+ax_rl = Axis(fig_rl[1, 1], xlabel = "Real", ylabel = "Imaginary", xticks = 0.4:0.1:1.0, yticks = -0.2:0.05:0.2, aspect = DataAspect(), limits = ((0.6, 1.05), (-0.17, 0.17)))
+θ_circle = range(0, 2π, length = 200)
+lines!(ax_rl, cos.(θ_circle), sin.(θ_circle), color = :gray, linestyle = :dash)
+scatter!(ax_rl, real.(ol_poles), imag.(ol_poles), marker = :x, color = :black, markersize = 15, label = "Open Loop Poles")
 for p in 1:3
     lines!(ax_rl, real.(poles[p, :]), imag.(poles[p, :]), linewidth = 2)
 end
-R_nom = 50.0
-K_nom = lqr(sysd, Q_lqr, R_nom)
-cl_poles_nom = pole(ss(sysd.A - sysd.B * K_nom, sysd.B, sysd.C, sysd.D, sysd.Ts))
-scatter!(ax_rl, real.(cl_poles_nom), imag.(cl_poles_nom), marker = :circle, color = :red, markersize = 10, label = "R = $R_nom")
-
-axislegend(ax_rl, position = :rt)
+scatter!(ax_rl, real.(cl_poles_nom), imag.(cl_poles_nom), marker = :circle, color = :red, markersize = 15, label = "Closed Loop Poles")
+r = 0.01:0.01:1
+θr = sqrt(0.5) * (-log.(r))
+lines!(ax_rl, r .* cos.(θr), r .* sin.(θr), color = :green, linestyle = :dot, label = "ζ = 0.707")
+axislegend(ax_rl, position = :lb)
 display(fig_rl)
-# save("results/root_locus_discrete.pdf", fig_rl)
+save("results/pitch_root_locus.pdf", fig_rl)
 
 ## FPA Closed-Loop Step Response (Discrete)
 # x[k+1] = (A - B*K)*x[k] + B*(K*Nx + Nu) * γref
@@ -130,7 +131,7 @@ ax_step = Axis(fig_step[1, 1], xlabel = "Time [s]", ylabel = "Angle [deg]", titl
 # step() for discrete systems returns the points at exactly the sample times
 lines!(ax_step, t_out, rad2deg.(y_step[:]), linewidth = 2, label = "γ (Flight Path)")
 lines!(ax_step, t_out, rad2deg.(x_step[2, :]), linewidth = 2, linestyle = :dash, label = "θ (Pitch)")
-lines!(ax_step, t_out, ones(length(t_out)), linewidth = 1, linestyle = :dot, color = :black, label = "Reference")
+lines!(ax_step, t_out, rad2deg.(ones(length(t_out))), linewidth = 1, linestyle = :dot, color = :black, label = "Reference")
 
 axislegend(ax_step, position = :rb)
 display(fig_step)

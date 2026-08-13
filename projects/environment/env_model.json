@@ -1,7 +1,7 @@
 {
     "model": {
-        "reference_speed": 3.0,
+        "reference_speed": 2.0,
         "reference_altitude": 2.0,
-        "reference_direction": 40
+        "reference_direction": 60.0
     }
 }

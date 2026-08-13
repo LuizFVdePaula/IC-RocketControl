@@ -247,8 +247,8 @@ function control_fpa(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::C
     δr_cmd = 0.0
     
     # LQR Synthesis
-    Q = diagm([3, 200, 200.0]) # Penalize gamma error heavily
-    R_lqr = 50.0
+    Q = diagm([2, 130, 200.0]) # Penalize gamma error heavily
+    R_lqr = 48.0
     sysc = ss(A, B, I(3), 0)
     sysd = c2d(sysc, cp.Ts_control)
     # Calculate optimal gain K
@@ -266,21 +266,33 @@ function control_fpa(eskf_state::ESKFState, imu_gyro, dm::DynamicModel, t, cp::C
     Kp_yaw = cp.ωn_pitch^2 / Mdq_safe
     Kd_yaw = (2 * cp.ζ_pitch * cp.ωn_pitch + Mq) / Mdq_safe
     δr_cmd = Kp_yaw * err_ψ - Kd_yaw * r_est
-    
-    # Roll (PID, since there's no FPA for roll)
-    err_ϕ = 0.0 - ϕ
+    δr_cmd = 0.0 # yaw controller inactive
+
+    # Roll (Discrete Pole Placement)
     Jxx = dm.Jxx(t)
-    M_delta_p = q_bar * dm.Sref * dm.Lref * dm.Clδp / Jxx
-    M_p = q_bar * dm.Sref * dm.Lref^2 * dm.Clp / (2 * V_est * Jxx)
+    Lp = q_bar * dm.Sref * dm.Lref^2 * dm.Clp / (2 * V_est * Jxx)
+    Lδp = q_bar * dm.Sref * dm.Lref * dm.Clδp / Jxx
     
-    sign_Mdp = sign(M_delta_p) == 0 ? -1.0 : sign(M_delta_p)
-    Mdp_safe = sign_Mdp * max(abs(M_delta_p), 1e-3)
-    Kp_roll = cp.ωn_roll^2 / Mdp_safe
-    Kd_roll = (2 * cp.ζ_roll * cp.ωn_roll + M_p) / Mdp_safe
-    δp_cmd = Kp_roll * err_ϕ - Kd_roll * p_est
+    δp_cmd = 0.0
+    if abs(Lδp) > 1e-5
+        A_roll = [0.0 1.0; 0.0 Lp]
+        B_roll = [0.0; Lδp]
+        sysc_roll = ss(A_roll, B_roll, I(2), 0)
+        sysd_roll = c2d(sysc_roll, cp.Ts_control)
+        
+        poles_cont = cp.ωn_roll * [-cp.ζ_roll + im * sqrt(1 - cp.ζ_roll^2), -cp.ζ_roll - im * sqrt(1 - cp.ζ_roll^2)]
+        poles_disc = exp.(poles_cont * cp.Ts_control)
+        
+        K_roll = place(sysd_roll, poles_disc)
+        #K_roll = lqr(sysd_roll, diagm([1 / 3^2, 1 / 30^2]), 1 / 0.3^2)
+
+        # State feedback for ϕ=0, p=0
+        x_roll = [ϕ, p_est]
+        δp_cmd = -(K_roll * x_roll)[1]
+    end
     
     # Final Deflections
-    f_rail = t < 1.5 ? 0.0 : 1.0
+    f_rail = t < 1.0 ? 0.0 : 1.0
     u_p = clamp(δp_cmd, deg2rad(-10), deg2rad(10)) * f_rail
     u_q = clamp(δq_cmd, deg2rad(-10), deg2rad(10)) * f_rail
     u_r = clamp(δr_cmd, deg2rad(-10), deg2rad(10)) * f_rail

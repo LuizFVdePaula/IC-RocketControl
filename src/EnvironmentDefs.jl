@@ -58,8 +58,8 @@ function Environment(wind_table::DataFrame)
     litp_ve = interpolate((wind_table.height,), wind_east, Gridded(Linear()))
     height = 0:50:2000
     return Environment(
-        extrapolate(scale(interpolate(litp_vn(height), BSpline(Cubic(Line(OnGrid())))), height), Throw()),
-        extrapolate(scale(interpolate(litp_ve(height), BSpline(Cubic(Line(OnGrid())))), height), Throw())
+        extrapolate(scale(interpolate(litp_vn(height), BSpline(Cubic(Line(OnGrid())))), height), Flat()),
+        extrapolate(scale(interpolate(litp_ve(height), BSpline(Cubic(Line(OnGrid())))), height), Flat())
     )
 end
 
@@ -83,9 +83,9 @@ function windmodel(Vref, href, θref)
     h₀ = 0.1
     hvals = [href; collect(100:100:2000)]
     αV = 0.9 # correlação vertical de velocidade
-    αθ = 0.7 # correlação vertical de direção
-    σV = 0.5 # intensidade velocidade
-    σθ = 0.1 # intensidade direção
+    αθ = 0.6 # correlação vertical de direção
+    σV = 0.3 # intensidade velocidade
+    σθ = 0.3 # intensidade direção
     V = Vref * log.(hvals / h₀) / log(href / h₀) .+ correlatednoise(length(hvals), αV, σV)
     θ = θref .+ correlatednoise(length(hvals), αθ, σθ)
     return DataFrame("height" => [0; hvals], "speed" => [0; V], "direction" => [θref; rad2deg.(θ)])
