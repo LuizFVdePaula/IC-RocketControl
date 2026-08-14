@@ -37,7 +37,7 @@ R_baro = 2.0^2 # 2 m standard deviation on barometer
 ωn_pitch = 5.0 # rad/s
 ζ_pitch = 0.7
 
-ωn_roll = 7.0 # rad/s
+ωn_roll = 5.0 # rad/s
 ζ_roll = 0.9
 
 target_apogee = 1000.0 # meters
@@ -59,15 +59,18 @@ params = ControlParameters(
 ## Simulation
 
 ts = range(-10.0, 20.0, step = Ts_imu) # Step matches Ts_imu exactly
-ts_flight = ts[5001:end]
 
 sim, control_hist, est, meas = simulate(rkt, env, params)
 res = postprocess(rkt, env, sim, control_hist, est, meas, ts)
-res_flight = res[5001:end, :]
+idx = argmax(res.h)
+res_flight = res[5001:idx, :]
+ts_flight = ts[5001:idx]
 
 sim_nc, control_hist_nc, est_nc, meas_nc = simulate(rkt, env, params, ctrl_func = nothing)
 res_nc = postprocess(rkt, env, sim_nc, control_hist_nc, est_nc, meas_nc, ts)
-res_flight_nc = res_nc[5001:end, :]
+idx_nc = argmax(res_nc.h)
+res_flight_nc = res_nc[5001:idx_nc, :]
+ts_flight_nc = ts[5001:idx_nc]
 
 ##
 
@@ -93,32 +96,40 @@ display(fig_gamma)
 
 using CairoMakie
 
-fig_final = Figure(size = (600, 900))
+fig_final_1 = Figure(size = (500, 450), fontsize = 16, figure_padding = (3, 3, 3, 3))
 
-ax_fpa = Axis(fig_final[1, 1], ylabel = "FPA γ [deg]", limits = (nothing, (0, 90)))
-lines!(ax_fpa, ts_flight, rad2deg.(res_flight.gamma), label = "Controlled")
-lines!(ax_fpa, ts_flight, rad2deg.(res_flight_nc.gamma), label = "NC", linestyle = :dash)
+ax_fpa = Axis(fig_final_1[1, 1], xlabel = "Time [s]", ylabel = "FPA γ [deg]", yticks = 0:20:80, limits = (nothing, (0, 90)))
+lines!(ax_fpa, ts_flight, rad2deg.(res_flight.gamma), label = "Control on")
+lines!(ax_fpa, ts_flight_nc, rad2deg.(res_flight_nc.gamma), label = "Control off", linestyle = :dash)
 hlines!(ax_fpa, 80.0, linestyle = :dot, color = :black, label = "Reference")
-#axislegend(ax_fpa)
+axislegend(ax_fpa, position = :lb)
 
-ax_roll = Axis(fig_final[2, 1], ylabel = "Roll Angle ϕ [deg]")
-lines!(ax_roll, ts_flight, rad2deg.(res_flight.ϕ), label = "Controlled")
-lines!(ax_roll, ts_flight, rad2deg.(res_flight_nc.ϕ), label = "NC", linestyle = :dash)
-#axislegend(ax_roll)
+ax_roll = Axis(fig_final_1[2, 1], xlabel = "Time [s]", ylabel = "Roll Angle ϕ [deg]", yticks = -180:90:180)
+lines!(ax_roll, ts_flight, rad2deg.(res_flight.ϕ), label = "Control on")
+lines!(ax_roll, ts_flight_nc, rad2deg.(res_flight_nc.ϕ), label = "Control off", linestyle = :dash)
+axislegend(ax_roll, position = :lb)
 
-ax_uq = Axis(fig_final[3, 1], ylabel = "Pitch Deflection [deg]")
-lines!(ax_uq, ts_flight, rad2deg.(res_flight.δq), label = "Controlled")
-lines!(ax_uq, ts_flight, rad2deg.(res_flight_nc.δq), label = "NC", linestyle = :dash)
-#axislegend(ax_uq)
+display(fig_final_1)
+save("results/fig_final_1.pdf", fig_final_1)
 
-ax_up = Axis(fig_final[4, 1], ylabel = "Roll Deflection [deg]")
-lines!(ax_up, ts_flight, rad2deg.(res_flight.δp), label = "Controlled")
-lines!(ax_up, ts_flight, rad2deg.(res_flight_nc.δp), label = "NC", linestyle = :dash)
-#axislegend(ax_up)
+##
 
-ax_V = Axis(fig_final[5, 1], ylabel = "Total Speed [m/s]")
-lines!(ax_V, ts_flight, (@. sqrt(res_flight.u^2 + res_flight.v^2 + res_flight.w^2)), label = "Controlled")
-lines!(ax_V, ts_flight, (@. sqrt(res_flight_nc.u^2 + res_flight_nc.v^2 + res_flight_nc.w^2)), label = "NC", linestyle = :dash)
+fig_final_2 = Figure(size = (500, 400), fontsize = 16, figure_padding = (3, 3, 3, 3))
+
+ax_uq = Axis(fig_final_2[1, 1], xlabel = "Time [s]", ylabel = "Pitch Deflection [deg]")
+lines!(ax_uq, ts_flight, rad2deg.(res_flight.δq), label = "Control on")
+lines!(ax_uq, ts_flight_nc, rad2deg.(res_flight_nc.δq), label = "Control off", linestyle = :dash)
+axislegend(ax_uq, position = :lb)
+
+ax_up = Axis(fig_final_2[2, 1], xlabel = "Time [s]", ylabel = "Roll Deflection [deg]")
+lines!(ax_up, ts_flight, rad2deg.(res_flight.δp), label = "Control on")
+lines!(ax_up, ts_flight_nc, rad2deg.(res_flight_nc.δp), label = "Controll off", linestyle = :dash)
+axislegend(ax_up, position = :lt)
+
+#ax_V = Axis(fig_final[5, 1], ylabel = "Total Speed [m/s]")
+#lines!(ax_V, ts_flight, (@. sqrt(res_flight.u^2 + res_flight.v^2 + res_flight.w^2)), label = "Controlled")
+#lines!(ax_V, ts_flight_nc, (@. sqrt(res_flight_nc.u^2 + res_flight_nc.v^2 + res_flight_nc.w^2)), label = "NC", linestyle = :dash)
 #axislegend(ax_V)
 
-display(fig_final)
+display(fig_final_2)
+save("results/fig_final_2.pdf", fig_final_2)

@@ -39,8 +39,8 @@ sys = c2d(sysc, Ts)
 
 ##
 
-ω_roll_desired = 2π * 1.5
-ξ_roll_desired = 0.707
+ω_roll_desired = 2π * 0.8
+ξ_roll_desired = 0.9
 poles_continuous = ω_roll_desired * [-ξ_roll_desired + im * sqrt(1 - ξ_roll_desired^2), -ξ_roll_desired - im * sqrt(1 - ξ_roll_desired^2)]
 poles_discrete = exp.(poles_continuous * Ts)
 
@@ -54,8 +54,8 @@ K_lqr = lqr(sys, diagm([1 / 3^2, 1 / 30^2]), 1 / 0.3^2)
 
 ## Root locus plot for Successive Loop Closure
 
-fig = Figure(size = (500, 400), fontsize = 16)
-ax = Axis(fig[1, 1], xlabel = "Real", ylabel = "Imaginary", aspect = DataAspect(), yticks = -0.2:0.1:0.2, limits = ((0.45, 1.05), (-0.25, 0.25)))
+fig = Figure(size = (500, 360), fontsize = 16, figure_padding = (2, 2, 2, 2))
+ax = Axis(fig[1, 1], xlabel = "Real", ylabel = "Imaginary", aspect = DataAspect(), yticks = -0.2:0.1:0.2, limits = ((0.45, 1.05), (-0.22, 0.22)))
 
 # Plot Unit Circle
 θ_circle = range(0, 2π, length = 200)
@@ -92,7 +92,7 @@ r_ξ = 0.01:0.01:1
 θ_ξ = -sqrt(1 - ξ_roll_desired^2) / ξ_roll_desired * log.(r_ξ)
 x_ξ = r_ξ .* cos.(θ_ξ)
 y_ξ = r_ξ .* sin.(θ_ξ)
-lines!(ax, x_ξ, y_ξ, label = "ξ = 0.707", linestyle = :dash, color = :green)
+lines!(ax, x_ξ, y_ξ, label = "ξ = $ξ_roll_desired", linestyle = :dash, color = :green)
 
 axislegend(ax, position = :lb)
 save("results/roll_root_locus.pdf", fig)

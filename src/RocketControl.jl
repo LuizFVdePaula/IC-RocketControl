@@ -21,7 +21,7 @@ using .Simulate
 
 export Environment, environment, plotinfo
 export Stage, stage
-export DynamicModel, ControlParameters, continuousmodel
-export simulate, postprocess, dynamics, ∇
+export DynamicModel, ControlParameters, continuousmodel, control_fpa, control_pid
+export simulate, postprocess, dynamics, ∇, run_monte_carlo
 
 end

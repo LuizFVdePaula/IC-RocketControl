@@ -72,6 +72,7 @@ struct ActiveAerodynamics
     ξ::Float64
     base::SymmetricBaseModel
     deflection::SymmetricDeflectionModel
+    δp0::Float64
 end
 
 """
@@ -106,7 +107,7 @@ function aerodynamic_coefficients(aed::ActiveAerodynamics, M, αT, ϕA, ΔXCG, �
     sϕA, cϕA = sincos(ϕA)
     TRB = SMatrix{3, 3, Float64, 9}(1, 0, 0, 0, cϕA, sϕA, 0, -sϕA, cϕA)
     ωBAnorm_R = TRB * ωBAnorm
-    δpqr_R = TRB * δpqr
+    δpqr_R = TRB * (δpqr + [aed.δp0, 0.0, 0.0])
 
     δeff = 0.5 * (abs(δpqr[2]) + abs(δpqr[3]))
     CA = (on ? aed.base.CAon(M, αT) : aed.base.CAoff(M, αT)) + aed.deflection.CAδeff2(M, αT) * δeff^2
@@ -137,6 +138,7 @@ function from_dict(dict::AbstractDict)
     model = dict["model"]
     extrapolation = dict["extrapolation"]
     coeffs = CSV.read(dict["coefficients"], DataFrame)
+    δp0 = deg2rad(dict["deflection_p_0"])
 
     scheme = if extrapolation == "none"
         Throw()
@@ -149,18 +151,18 @@ function from_dict(dict::AbstractDict)
     end
 
     if model == "symmetric"
-        return from_dict_symmetric(Lref, Sref, XR, ω, ξ, coeffs, scheme)
+        return from_dict_symmetric(Lref, Sref, XR, ω, ξ, coeffs, scheme, δp0)
     else
         throw(KeyError("Aerodynamic model $model not defined."))
     end
 end
 
-function from_dict_symmetric(Lref, Sref, XR, ω, ξ, coefs, scheme)
+function from_dict_symmetric(Lref, Sref, XR, ω, ξ, coefs, scheme, δp0)
     M = coefs.MACH |> unique
     αT = coefs.ALPHA |> unique .|> deg2rad
     base = SymmetricBaseModel(M, αT, coefs, scheme)
     deflection = SymmetricDeflectionModel(M, αT, coefs, scheme)
-    return ActiveAerodynamics(Lref, Sref, XR, ω, ξ, base, deflection)
+    return ActiveAerodynamics(Lref, Sref, XR, ω, ξ, base, deflection, δp0)
 end
 
 function interp_coeff(M, αT, coef, scheme)
@@ -168,12 +170,12 @@ function interp_coeff(M, αT, coef, scheme)
     return extrapolate(interpolate((M, αT), coef_table, Gridded(Linear())), scheme)
 end
 
-function from_montecarlo(aed::ActiveAerodynamics, σCA)
+function from_montecarlo(aed::ActiveAerodynamics, σCA, σδp0)
     base_mc = deepcopy(aed.base)
     fCA = 1 + randn() * σCA
     base_mc.CAon.itp.coefs .*= fCA
     base_mc.CAoff.itp.coefs .*= fCA
-    return ActiveAerodynamics(aed.Lref, aed.Sref, aed.XR, aed.ωn, aed.ξ, base_mc)
+    return ActiveAerodynamics(aed.Lref, aed.Sref, aed.XR, aed.ω, aed.ξ, base_mc, aed.deflection, aed.δp0 + σδp0 * randn())
 end
 
 end

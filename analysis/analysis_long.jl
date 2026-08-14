@@ -12,7 +12,7 @@ env = environment("projects/environment/test_env.json");
 ## Flight conditions and reference state
 
 Vref = 100;
-href = 1000;
+href = 500;
 tref = 2;
 ρref = ρ_kg_m³(p_Pa(href), T_K(href));
 
@@ -90,7 +90,7 @@ R_vals = 10 .^ range(1, 4, length = 300)
 
 poles = zeros(ComplexF64, 3, length(R_vals))
 
-R_nom = 48.0
+R_nom = 50.0
 K_nom = lqr(sysd, Q_lqr, R_nom)
 cl_poles_nom = pole(ss(sysd.A - sysd.B * K_nom, sysd.B, sysd.C, sysd.D, sysd.Ts))
 
@@ -100,8 +100,8 @@ for (i, R_val) in enumerate(R_vals)
     poles[:, i] = pole(cl_sys)
 end
 
-fig_rl = Figure(size = (500, 400), fontsize = 16)
-ax_rl = Axis(fig_rl[1, 1], xlabel = "Real", ylabel = "Imaginary", xticks = 0.4:0.1:1.0, yticks = -0.2:0.05:0.2, aspect = DataAspect(), limits = ((0.6, 1.05), (-0.17, 0.17)))
+fig_rl = Figure(size = (500, 300), fontsize = 16, figure_padding = (2, 2, 2, 2))
+ax_rl = Axis(fig_rl[1, 1], xlabel = "Real", ylabel = "Imaginary", xticks = 0.4:0.1:1.0, yticks = -0.2:0.05:0.2, aspect = DataAspect(), limits = ((0.6, 1.05), (-0.13, 0.13)))
 θ_circle = range(0, 2π, length = 200)
 lines!(ax_rl, cos.(θ_circle), sin.(θ_circle), color = :gray, linestyle = :dash)
 scatter!(ax_rl, real.(ol_poles), imag.(ol_poles), marker = :x, color = :black, markersize = 15, label = "Open Loop Poles")

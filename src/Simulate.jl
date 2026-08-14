@@ -12,6 +12,11 @@ using ..RK4Solver
 using DataFrames
 using LinearAlgebra
 using StaticArrays
+using ..Aerodynamics: from_montecarlo as aed_from_montecarlo
+using ..Propulsion: from_montecarlo as prp_from_montecarlo
+using ..Structure: from_montecarlo as str_from_montecarlo
+
+export simulate, postprocess, run_monte_carlo
 
 """
     simulate(stg::Stage, env::Environment, cp::ControlParameters)
@@ -199,6 +204,40 @@ function postprocess(stg, env, sv_historic, u_historic, x̂_historic, y_historic
         "imu_p" => imu_gyro_p, "imu_q" => imu_gyro_q, "imu_r" => imu_gyro_r, "baro_h" => baro_h
     )
     return df
+end
+
+"""
+    run_monte_carlo(N::Int, stg_base::Stage, env_json_path::String, cp::ControlParameters; ...)
+
+Runs `N` Monte Carlo simulations. In each run, a new wind profile is generated from `env_json_path`.
+The structural mass, engine deflection angles (z and y), and motor offset are varied.
+"""
+function run_monte_carlo(N::Int, stg_base::Stage, env_json_path::String, cp::ControlParameters;
+                         σm=0.02, σI=0.05, σT=0.03, σreyz=0.001, σξη=deg2rad(0.2), σδp0 = deg2rad(0.05),
+                         ctrl_func=control_fpa)
+    results = Vector{DataFrame}(undef, N)
+    
+    for i in 1:N
+        # 1. Generate new environment (with new wind profile)
+        env = environment(env_json_path)
+        
+        # 2. Mutate stage subsystems based on given standard deviations
+        new_aed = aed_from_montecarlo(stg_base.aed, 0.01, σδp0)
+        new_str = str_from_montecarlo(stg_base.str, σm, σI)
+        new_prp = prp_from_montecarlo(stg_base.prp, σT, σreyz, σξη)
+        stg_mc = Stage(stg_base.aed, new_prp, stg_base.imu, new_str)
+        
+        # 3. Run simulation
+        sv_hist, u_hist, x_hist, y_hist = simulate(stg_mc, env, cp; ctrl_func=ctrl_func)
+        
+        # 4. Post-process and save
+        ts = range(-10.0, 20.0, step=cp.Ts_imu)
+        results[i] = postprocess(stg_mc, env, sv_hist, u_hist, x_hist, y_hist, ts)
+        
+        println("Completed MC Run $i / $N")
+    end
+    
+    return results
 end
 
 end
